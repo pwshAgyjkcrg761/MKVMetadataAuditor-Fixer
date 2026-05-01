@@ -123,11 +123,30 @@ foreach ($folderPath in $targetFolders) {
                 
                 $Params = @()
                 Get-Selector -Reset
+                
                 foreach ($t in $group.Json.tracks) {
                     $sel = Get-Selector $t.type
-                    if ($t.properties.language -eq "und") { $Params += @('--edit', "track:$sel", '--set', 'language=eng') }
-                    if ($t.type -eq "audio" -and $t.properties.language -eq "jpn" -and -not $t.properties.default_track) { 
-                        $Params += @('--edit', "track:$sel", '--set', 'flag-default=1') 
+                    
+                    # 1. ALWAYS clear existing default flags for this track type first
+                    $Params += @('--edit', "track:$sel", '--set', 'flag-default=0')
+
+                    # 2. Re-enable the Default flag ONLY for the target tracks
+                    if ($t.type -eq "audio" -and $t.properties.language -eq "jpn") {
+                        $Params += @('--edit', "track:$sel", '--set', 'flag-default=1')
+                    }
+                    
+                    if ($t.type -eq "subtitles" -and $t.properties.language -eq "eng" -and $t.properties.track_name -notmatch "Signs|Songs|SDH|HI/CC") {
+                        $Params += @('--edit', "track:$sel", '--set', 'flag-default=1')
+                    }
+
+                    # Rule: Identify and name "Signs & Songs" tracks
+                    if ($t.type -eq "subtitles" -and $t.properties.track_name -match "Signs|Songs|Lyrics") {
+                        $Params += @('--edit', "track:$sel", '--set', 'name=Signs & Songs', '--set', 'flag-default=0', '--set', 'flag-forced=0')
+                    }
+
+                    # 3. Handle undefined languages
+                    if ($t.properties.language -eq "und") {
+                        $Params += @('--edit', "track:$sel", '--set', 'language=eng')
                     }
                 }
 
