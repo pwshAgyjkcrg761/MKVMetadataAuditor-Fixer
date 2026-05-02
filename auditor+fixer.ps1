@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: auditor+fixer.ps1
-# VERSION: v2026.05.01_11.02.00
+# VERSION: v2026.05.02_14.46.00
 # TARGET: PowerShell 7.6.1 LTS
 # ==============================================================================
 # <PROTECTED>
@@ -53,13 +53,36 @@ if ($null -eq $PathParts -or $PathParts.Count -eq 0) {
 $rootLog = Join-Path $PSScriptRoot "auditor+fixer_logs"
 $pLogDir = Join-Path $rootLog "Path_Logs"; $dLogDir = Join-Path $rootLog "Detail_Logs"
 $mLogDir = Join-Path $rootLog "Mismatch_Logs"; $cLogDir = Join-Path $rootLog "Comparison_Logs"
-foreach ($dir in @($rootLog,$pLogDir,$dLogDir,$mLogDir,$cLogDir)) { if (-not (Test-Path $dir)) { New-Item $dir -ItemType Directory | Out-Null } }
+$fLogDir = Join-Path $rootLog "FIX_QUEUE"
+foreach ($dir in @($rootLog,$pLogDir,$dLogDir,$mLogDir,$cLogDir,$fLogDir)) { 
+    if (-not (Test-Path $dir)) { New-Item $dir -ItemType Directory | Out-Null } 
+}
 
 $ts = Get-Date -Format "yyyy-MM-dd_HH-mm-ss"
 $pathLog = Join-Path $pLogDir "auditor+fixer_Paths_$($ts)-log.txt"
 $detailLog = Join-Path $dLogDir "auditor+fixer_Details_$($ts)-log.txt"
 $missLog = Join-Path $mLogDir "auditor+fixer_Mismatches_$($ts)-log.txt"
 $compLog = Join-Path $cLogDir "auditor+fixer_Comparison_$($ts)-log.txt"
+$fixerLog = Join-Path $fLogDir "auditor+fixer_FIX_QUEUE_$($ts)-log.txt"
+
+# --- STARTUP DISPLAY ---
+Clear-Host
+$version = "2026.05.02_14.46.00"
+Write-Host "=================================================="
+Write-Host "auditor+fixer.ps1 v$version" -ForegroundColor Cyan
+Write-Host "=================================================="
+#Write-Host "Script Location: " -NoNewline; Write-Host "$PSScriptRoot" -ForegroundColor Yellow
+Write-Host "Target Folder(s):" -ForegroundColor White
+foreach ($p in $inputPaths) { Write-Host "  -> $p" -ForegroundColor Magent }
+Write-Host "--------------------------------------------------"
+
+$choice = Read-Host "Begin processing? (Y/N)"
+if ($choice -notmatch "^[yY]$") {
+    Write-Host "Operation cancelled by user." -ForegroundColor Yellow
+    Pause; exit
+}
+Write-Host "Starting..." -ForegroundColor Green
+# --- END STARTUP DISPLAY ---
 
 # 2. Functions
 $global:trackCounters = @{ "video" = 1; "audio" = 1; "subtitles" = 1 }
@@ -130,6 +153,25 @@ function Get-HeaderBlock($codecPadding, $propPadding, $namePadding) {
     return $bar, $h
 }
 
+function Write-InlineProgress {
+    param(
+        [int]$Current,
+        [int]$Total,
+        [string]$Message
+    )
+    $percent = [Math]::Min(100, [Math]::Max(0, [int]($Current / $Total * 100)))
+    $width = 30 
+    $done = [Math]::Min($width, [int]($percent / 100 * $width))
+    $left = $width - $done
+    
+    $bar = ("█" * $done) + ("░" * $left)
+    # Using ${Message} ensures the colon is treated as plain text
+    # PadRight(100) ensures the entire line is cleared before writing the new one
+    $progressLine = "`r[SHIELD] ${Message}: [$bar] $percent% ($Current/$Total)".PadRight(100)
+    
+    Write-Host -NoNewline $progressLine -ForegroundColor Cyan
+}
+
 # 3. Main Processing Loop
 # Includes the base folders themselves PLUS all sub-directories
 $targetFolders = Get-ChildItem -LiteralPath $inputPaths -Directory -Recurse | Sort-Object FullName
@@ -197,14 +239,29 @@ foreach ($folderPath in $targetFolders) {
     }
 
     # --- GROUPING LOGIC ---
+    $mkvCount = $mkvFiles.Count
     $orderedGroups = New-Object System.Collections.Generic.List[PSObject]
-    foreach ($f in $mkvFiles) {
+    
+    for ($i = 0; $i -lt $mkvCount; $i++) {
+        $f = $mkvFiles[$i]
+        # 1. Update the user with the progress bar immediately
+        Write-InlineProgress -Current ($i + 1) -Total $mkvCount -Message "Analyzing Files"
+        
+        # 2. Log path to file
         $f.FullName | Out-File $pathLog -Append -Encoding utf8
-		$json = & $mkvmerge -J $f.FullName | ConvertFrom-Json
+        
+        # 3. Get JSON and build signature
+        $json = & $mkvmerge -J $f.FullName | ConvertFrom-Json
         $sig = (($json.tracks | ForEach-Object { "$($_.id)|$($_.type)|$($_.codec)|$($_.properties.language)|$($_.properties.default_track)|$($_.properties.track_name)" }) -join "`n")
+        
+        # 4. Assign to existing group or create new one
         $existingGroup = $orderedGroups | Where-Object { $_.Sig -eq $sig }
         if ($null -eq $existingGroup) {
-            $orderedGroups.Add([PSCustomObject]@{ Sig = $sig; Files = New-Object System.Collections.Generic.List[PSObject]; Json = $json })
+            $orderedGroups.Add([PSCustomObject]@{ 
+                Sig = $sig; 
+                Files = New-Object System.Collections.Generic.List[PSObject]; 
+                Json = $json 
+            })
             $existingGroup = $orderedGroups[-1]
         }
         $existingGroup.Files.Add($f)
@@ -213,17 +270,20 @@ foreach ($folderPath in $targetFolders) {
     $primaryGroup = $orderedGroups[0]
     $mismatches = $mkvFiles.Count - $primaryGroup.Files.Count
 	
-	# If there are mismatches, print the Folder header to the mismatch log once
+    # Print folder header to mismatch log if needed
     if ($mismatches -gt 0) {
-		# Check if file exists and has content to decide if we need a leading spacer
         $spacer = if (Test-Path $missLog) { "`r`n" } else { "" }
-        $folderHeader = "${spacer}Folder: $($folder.FullName)"
-        $folderHeader | Out-File $missLog -Append -Encoding utf8
+        "${spacer}Folder: $($folder.FullName)" | Out-File $missLog -Append -Encoding utf8
     }
 
     # --- PROCESS GROUPS ---
-    for ($g = 0; $g -lt $orderedGroups.Count; $g++) {
+    $totalGroups = $orderedGroups.Count
+    for ($g = 0; $g -lt $totalGroups; $g++) {
         $currentGroup = $orderedGroups[$g]
+        
+        # Progress Bar Update
+        Write-InlineProgress -Current ($g + 1) -Total $totalGroups -Message "Processing Groups"
+		
         $sig = $currentGroup.Sig
         if (-not $global:GroupMap.ContainsKey($sig)) { $global:GroupMap[$sig] = $global:GroupMap.Count + 1 }
         $stableIndex = $global:GroupMap[$sig]
@@ -296,7 +356,7 @@ foreach ($folderPath in $targetFolders) {
 
         # --- MATCHES SECTION WITH 1-10 NUMBERING ---
         $entry.Add("")
-		$entry.Add("===Matches ${label} [$($repFile.Name)]: $($currentGroup.Files.Count.ToString('00'))===")
+		$entry.Add("===Matches ${label} [$shortName]: $($currentGroup.Files.Count.ToString('00'))===")
         for ($i = 0; $i -lt $currentGroup.Files.Count; $i++) {
             $entry.Add("  - $($currentGroup.Files[$i].Name)")
         }
@@ -331,7 +391,85 @@ foreach ($folderPath in $targetFolders) {
         if ($mismatches -gt 0) {
             $entry | Out-File $missLog -Append -Encoding utf8
         }
-    }
+		
+		# --- GENERATE FIXER QUEUE ---
+        if ($true) { # Force log generation for every file processed
+		#Line below disabled for testing. Line above enabled for testing.
+		#if ($reasons -ne "" -and $reasons -notmatch "Reference Only") {
+            foreach ($fToFix in $currentGroup.Files) {
+                $fixDetails = New-Object System.Collections.Generic.List[string]
+                $fixDetails.Add("FILE: $($fToFix.FullName)")
+                
+                # 1. Global Reset Actions
+                $fixDetails.Add("  ACTION: SET_FLAG_HI=0 | ALL_TRACKS")
+                $fixDetails.Add("  ACTION: SET_DEFAULT=0 | ALL_TRACKS")
+                $fixDetails.Add("  ACTION: SET_FORCED=0 | ALL_TRACKS")
+
+                # Track selection variables
+                $foundJpnAudio = $false
+                $bestSubScore = -1
+                $bestSubSel = $null
+                $bestSubReason = ""
+
+                Get-Selector -Reset
+                foreach ($t in $currentGroup.Json.tracks) {
+                    $sel = Get-Selector $t.type
+                    $tName = $t.properties.track_name
+                    $tLang = $t.properties.language
+                    $tCodec = $t.properties.codec_id
+
+                    # 2. SDH to CC Conversion
+                    if ($tName -match "SDH") {
+                        $newName = $tName -replace "(?i)SDH", "CC"
+                        $fixDetails.Add("  ACTION: RENAME_TRACK='$newName' | TRACK: $sel | REASON: SDH to CC")
+                    }
+
+                    # 3. JPN Language Flag Correction
+                    if ($tLang -eq "jpn" -and $tName -match "English|Eng") {
+                        $fixDetails.Add("  ACTION: SET_LANGUAGE=eng | TRACK: $sel | REASON: Mislabeled JPN flag")
+                        $tLang = "eng" # Update local variable for subtitle logic below
+                    }
+
+                    # 4. Audio Default (First valid JPN non-commentary only)
+                    if (-not $foundJpnAudio -and $t.type -eq "audio" -and $tLang -eq "jpn") {
+                        if ($tName -notmatch "Commentary|Interview|Cast|Staff") {
+                            $fixDetails.Add("  ACTION: SET_DEFAULT=1 | TRACK: $sel | REASON: JPN Audio")
+                            $foundJpnAudio = $true
+                        }
+                    }
+
+                    # 5. Subtitle Codec Priority Check
+                    if ($t.type -eq "subtitles") {
+                        $isEng = ($tLang -eq "eng" -or ($tLang -eq "jpn" -and $tName -match "English|Eng"))
+                        $isForcedSpecial = ($t.properties.forced_track -eq $true)
+                        $isMain = ($tName -notmatch "Signs|Songs|SDH|HI/CC|CC" -and -not $isForcedSpecial)
+
+                        if ($isEng -and $isMain) {
+                            $currentScore = 0
+                            if ($tCodec -match "S_TEXT/(ASS|SSA)") { $currentScore = 4 }
+                            elseif ($tCodec -match "S_TEXT/UTF8|SRT") { $currentScore = 3 }
+                            elseif ($tCodec -match "S_HDMV/PGS") { $currentScore = 2 }
+                            elseif ($tCodec -match "S_VOBSUB") { $currentScore = 1 }
+
+                            if ($currentScore -gt $bestSubScore) {
+                                $bestSubScore = $currentScore
+                                $bestSubSel = $sel
+                                $bestSubReason = "Primary ENG Sub ($($tCodec -replace 'S_',''))"
+                            }
+                        }
+                    }
+                } # End of Tracks Loop
+
+                # Apply the best subtitle found after the loop finishes
+                if ($bestSubSel -ne $null) {
+                    $fixDetails.Add("  ACTION: SET_DEFAULT=1 | TRACK: $bestSubSel | REASON: $bestSubReason")
+                }
+
+                $fixDetails.Add(""); $fixDetails | Out-File $fixerLog -Append -Encoding utf8
+            } # End of Files Loop
+        } # End of Reasons Check
+    } # End of Groups Loop
+	Write-Host "" # Moves to a new line after the progress bar finishes
 
     # --- HEART SPACER ---
     $spacer = "`r`n.• ♬ ͜͝ ̣̣♡.• ♬ ͜͝ ̣̣♡.• ♬ ͜͝ ̣̣♡..• ♬ ͜͝ ̣̣♡.• ♬ ͜͝ ̣̣♡.• ♬ ͜͝ ̣̣♡..• ♬ ͜͝ ̣̣♡.• ♬ ͜͝ ̣̣♡.• ♬ ͜͝ ̣̣♡.`r`n"
