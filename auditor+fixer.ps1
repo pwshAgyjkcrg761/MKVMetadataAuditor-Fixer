@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: auditor+fixer.ps1
-# VERSION: v2026.05.05_16.30.00
+# VERSION: v2026.05.05_17.15.00
 # TARGET: PowerShell 7.6.1 LTS
 # ==============================================================================
 # <PROTECTED>
@@ -155,7 +155,7 @@ if (Test-Path $configFile) {
 
 # --- STARTUP DISPLAY ---
 #Clear-Host
-$version = "2026.05.05_16.30.00"
+$version = "2026.05.05_17.15.00"
 Write-Host "=================================================="
 Write-Host "auditor+fixer.ps1 v$version" -ForegroundColor Cyan
 Write-Host "=================================================="
@@ -499,15 +499,17 @@ foreach ($folderPath in $targetFolders) {
                     $target = if ($langMap.ContainsKey($targetLangInput.ToLower())) { $langMap[$targetLangInput.ToLower()] } else { $targetLangInput }
 
                     # 2. Check if the file is ACTUALLY different from your goal
-                    # This prevents 'und' from being replaced unless it's necessary
                     $isIncorrect = ($t.properties.language -ne $target) -or ($t.properties.default_track -ne $true)
                     
                     if ($isIncorrect) {
-                        # ONLY add the mkvpropedit command if the file isn't already 'Good'
+                        # 3. Add the mkvpropedit command
                         $Params += @('--edit', "track:$sel", '--set', "language=$target", '--set', "flag-default=1")
                         
-                        # 3. CRITICAL: Only trigger the file to save if -vidf was used.
-                        # If you only used -vid, this stays 'False' unless Audio/Subs trigger it.
+                        # 4. LOGGING: Horizontal pipe-separated format
+                        $logReason = if ($videoForceUpdate) { "Video Force (-vidf)" } else { "Passive Update (-vid)" }
+                        [void]$fixDetails.Add("  ACTION: SET_LANG=$target | SET_DEFAULT=1 | TRACK: $sel | REASON: $logReason")
+
+                        # 5. Only trigger the actual file write if -vidf was used
                         if ($videoForceUpdate) { $needsChange = $true }
                     }
                     continue 
