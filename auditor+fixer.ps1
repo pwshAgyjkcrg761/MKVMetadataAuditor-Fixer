@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: auditor+fixer.ps1
-# VERSION: v2026.05.05_14.15.00
+# VERSION: v2026.05.05_16.30.00
 # TARGET: PowerShell 7.6.1 LTS
 # ==============================================================================
 # <PROTECTED>
@@ -108,11 +108,11 @@ $codecMap = @{
 }
 
 # 2. APPLY OVERRIDES FROM COMMAND LINE
-# Video Language Translation (Targeting defaultSettings)
+# Ensure the Video object exists in the defaults
+$defaultSettings.Video = @{ TargetLanguage = "jpn" } # Initialize baseline
+
 if ($videoLanguage) { 
     $key = $videoLanguage.ToLower().Trim()
-    # Initialize the Video sub-hash if it doesn't exist
-    if (-not $defaultSettings.ContainsKey("Video")) { $defaultSettings.Video = @{} }
     $defaultSettings.Video.TargetLanguage = if ($langMap.ContainsKey($key)) { $langMap[$key] } else { $key }
 }
 
@@ -137,23 +137,25 @@ if ($subtitleCodecPriority) {
     $defaultSettings.Subtitles.CodecPriority = @($translated)
 }
 
-# 3. SAVE / LOAD LOGIC (Consolidated for Syntax Accuracy)
+# 3. SAVE / LOAD LOGIC
 if ($overrideDefaults) {
-    # If user wants to override, save current settings and use them
     $defaultSettings | ConvertTo-Json -Depth 10 | Out-File $configFile -Encoding utf8
     Write-Host "CONFIG: Settings updated and saved to $configFile" -ForegroundColor Green
-    $fixerConfig = $defaultSettings | ConvertTo-Json -Depth 10 | ConvertFrom-Json
-} elseif (Test-Path $configFile) {
-    # If no override, but config exists, load it
+}
+
+if (Test-Path $configFile) {
     $fixerConfig = Get-Content $configFile | ConvertFrom-Json
+    # CRITICAL: If Video is missing from an old JSON, add it now
+    if (-not $fixerConfig.PSObject.Properties['Video']) {
+        $fixerConfig | Add-Member -MemberType NoteProperty -Name "Video" -Value $defaultSettings.Video
+    }
 } else {
-    # Fallback to hardcoded defaults
     $fixerConfig = $defaultSettings | ConvertTo-Json -Depth 10 | ConvertFrom-Json
 }
 
 # --- STARTUP DISPLAY ---
 #Clear-Host
-$version = "2026.05.02_14.46.00"
+$version = "2026.05.05_16.30.00"
 Write-Host "=================================================="
 Write-Host "auditor+fixer.ps1 v$version" -ForegroundColor Cyan
 Write-Host "=================================================="
@@ -474,189 +476,93 @@ foreach ($folderPath in $targetFolders) {
             $fixDetails = New-Object System.Collections.Generic.List[string]
             $Params = @() 
             $needsChange = $false 
-            $bestAudioSel = $null
-            $bestSubSel = $null
-            $foundPrefAudio = $false
+            $bestAudioSel = $null; $bestSubSel = $null; $foundPrefAudio = $false
 
             [void]$fixDetails.Add("FILE: $($fToFix.FullName)")
 
+            # --- [CRITICAL FIX] RESOLVE TARGET LANGUAGE ONCE PER FILE ---
+            $rawInput = if ($videoLanguage) { $videoLanguage } else { $fixerConfig.Video.TargetLanguage }
+            $resolvedTarget = if ($null -ne $rawInput) {
+                $key = "$rawInput".ToLower().Trim()
+                if ($langMap.ContainsKey($key)) { $langMap[$key] } else { $key }
+            } else { $null }
+
             # 1. IDENTIFY TARGETS
-			$bestVideoSel = $null
-            $foundPrefVideo = $false
             Get-Selector -Reset
             foreach ($t in $currentGroup.Json.tracks) {
                 $sel = Get-Selector $t.type
-                $tName = $t.properties.track_name
-                $tLang = $t.properties.language
-				
-				# Identify Best Video (Strictly based on -vid parameter)
+                
+                # --- VIDEO ---
                 if ($t.type -eq "video") {
-                    # If we find a match for the target language, grab it
-                    if ($fixerConfig.Video.TargetLanguage -and $tLang -eq $fixerConfig.Video.TargetLanguage) {
-                        if (-not $foundPrefVideo) { $bestVideoSel = $sel; $foundPrefVideo = $true }
+                    # 1. Resolve the target language from your -vid chi command
+                    $targetLangInput = if ($videoLanguage) { $videoLanguage } else { $fixerConfig.Video.TargetLanguage }
+                    $target = if ($langMap.ContainsKey($targetLangInput.ToLower())) { $langMap[$targetLangInput.ToLower()] } else { $targetLangInput }
+
+                    # 2. Check if the file is ACTUALLY different from your goal
+                    # This prevents 'und' from being replaced unless it's necessary
+                    $isIncorrect = ($t.properties.language -ne $target) -or ($t.properties.default_track -ne $true)
+                    
+                    if ($isIncorrect) {
+                        # ONLY add the mkvpropedit command if the file isn't already 'Good'
+                        $Params += @('--edit', "track:$sel", '--set', "language=$target", '--set', "flag-default=1")
+                        
+                        # 3. CRITICAL: Only trigger the file to save if -vidf was used.
+                        # If you only used -vid, this stays 'False' unless Audio/Subs trigger it.
+                        if ($videoForceUpdate) { $needsChange = $true }
                     }
-                    # Fallback: Always ensure at least the first video track is tracked as 'Best' if no match found
-                    elseif (-not $foundPrefVideo) {
-                        $bestVideoSel = $sel
-                    }
+                    continue 
                 }
-				
-                # Identify Best Audio
-                if (-not $foundPrefAudio -and $t.type -eq "audio" -and $tLang -eq $fixerConfig.Audio.PreferredLanguage) {
-                    if (-not ($fixerConfig.Audio.IgnoreCommentary -and ($tName -match "Commentary|Interview"))) {
+
+                # --- AUDIO/SUB TARGETING ---
+                if ($t.type -eq "audio" -and -not $foundPrefAudio -and $t.properties.language -eq $fixerConfig.Audio.PreferredLanguage) {
+                    if (-not ($fixerConfig.Audio.IgnoreCommentary -and ($t.properties.track_name -match "Commentary|Interview"))) {
                         $bestAudioSel = $sel; $foundPrefAudio = $true
                     }
                 }
-                # Identify Best Subtitle
-                if ($t.type -eq "subtitles" -and $tLang -eq $fixerConfig.Subtitles.PreferredLanguage) {
-                    if ($tName -notmatch $fixerConfig.Subtitles.IgnoreNames) {
-                        $bestSubSel = $sel 
-                    }
-                }
-            }
-			
-			# --- INSERT BLOCK #2 HERE: Safety Check ---
-            $vidLanguageMismatch = $false
-            if ($fixerConfig.Video.TargetLanguage -and $foundPrefVideo) {
-                # We need to peek at the language of the track stored in $bestVideoSel
-                # Logic: Find the track in the JSON that matches the selector we picked
-                Get-Selector -Reset | Out-Null
-                $selectedVidLang = foreach ($vTrack in $currentGroup.Json.tracks) {
-                    $currentSel = Get-Selector $vTrack.type
-                    if ($currentSel -eq $bestVideoSel) { $vTrack.properties.language; break }
-                }
-                
-                if ($selectedVidLang -ne $fixerConfig.Video.TargetLanguage) {
-                    $vidLanguageMismatch = $true
-                }
-            }
-            # -------------------------------------------
-            
-			# 2. COMPARE AND QUEUE ACTIONS
-            Get-Selector -Reset
-            foreach ($t in $currentGroup.Json.tracks) {
-                $sel = Get-Selector $t.type
-                
-                # --- VIDEO TRACK LOGIC ---
-                if ($t.type -eq "video") {
-                    $targetLang = $fixerConfig.Video.TargetLanguage
-                    $currentLang = $t.properties.language
-                    $currentDefault = if ($t.properties.default_track) { 1 } else { 0 }
-
-                    $needsLangChange = if ($targetLang -and $currentLang -ne $targetLang) { $true } else { $false }
-                    $needsDefaultChange = if ($currentDefault -ne 1) { $true } else { $false }
-
-                    
-                   # 1. Standard -vid logic: Add to to-do list, but do NOT press "Go" ($needsChange)
-                    if ($needsLangChange -or $needsDefaultChange) {
-                        if ($needsLangChange) {
-                            $Params += @('--edit', "track:$sel", '--set', "language=$targetLang")
-                            [void]$fixDetails.Add("  ACTION: SET_LANG=$targetLang | TRACK: $sel")
-                        }
-                        if ($needsDefaultChange) {
-                            $Params += @('--edit', "track:$sel", '--set', "flag-default=1")
-                            [void]$fixDetails.Add("  ACTION: SET_DEFAULT=1 | TRACK: $sel")
-                        }
-                    }
-
-                    # 2. -vidf logic: This is the ONLY thing that should set $needsChange for video
-                    if ($videoForceUpdate) {
-                        # Add params even if the file is "good" to ensure it is stamped
-                        if (-not $needsLangChange -and $targetLang) { $Params += @('--edit', "track:$sel", '--set', "language=$targetLang") }
-                        if (-not $needsDefaultChange) { $Params += @('--edit', "track:$sel", '--set', "flag-default=1") }
-                        
-                        $needsChange = $true
-                        [void]$fixDetails.Add("  ACTION: FORCED_UPDATE | REASON: -vidf switch detected")
-                    }
-
-                    continue # Move to next track
+                if ($t.type -eq "subtitles" -and $t.properties.language -eq $fixerConfig.Subtitles.PreferredLanguage) {
+                    if ($t.properties.track_name -notmatch $fixerConfig.Subtitles.IgnoreNames) { $bestSubSel = $sel }
                 }
 
-                # --- AUDIO & SUBTITLE LOGIC ---
-                if ($t.type -match "audio|subtitles") {
-                    if ($fixerConfig.Global.ResetAllFlags) {
-                        # Determine if this specific track is the 'Best' one identified in Phase 1
-                        $targetDefault = if ($sel -eq $bestAudioSel -or $sel -eq $bestSubSel) { 1 } else { 0 }
-                        $currentDefault = if ($t.properties.default_track) { 1 } else { 0 }
-
-                        # 1. Fix Default Flags
-                        if ($currentDefault -ne $targetDefault) { 
-                            $Params += @('--edit', "track:$sel", '--set', "flag-default=$targetDefault")
-                            $needsChange = $true 
-                            [void]$fixDetails.Add("  ACTION: SET_DEFAULT=$targetDefault | TRACK: $sel | REASON: Aligning with Best Selection")
-                        }
-
-                        # 2. Strip Forced Flags
-                        if ($t.properties.forced_track -eq $true -or $t.properties.forced_track -eq 1) { 
-                            $Params += @('--edit', "track:$sel", '--set', 'flag-forced=0')
-                            $needsChange = $true
-                            [void]$fixDetails.Add("  ACTION: SET_FORCED=0 | TRACK: $sel")
-                        }
-
-                        # 3. Strip HI/CC Flags
-                        if ($t.properties.flag_hearing_impaired -eq $true -or $t.properties.flag_hearing_impaired -eq 1) { 
-                            $Params += @('--edit', "track:$sel", '--set', 'flag-hearing-impaired=0')
-                            $needsChange = $true
-                            [void]$fixDetails.Add("  ACTION: SET_HI=0 | TRACK: $sel")
-                        }
-                    }
+                # --- APPLY FLAGS ---
+                if ($fixerConfig.Global.ResetAllFlags -and ($t.type -match "audio|subtitles")) {
+                    $targetDefault = if ($sel -eq $bestAudioSel -or $sel -eq $bestSubSel) { 1 } else { 0 }
+                    if ($t.properties.default_track -ne $targetDefault) { $Params += @('--edit', "track:$sel", '--set', "flag-default=$targetDefault"); $needsChange = $true }
+                    if ($t.properties.forced_track) { $Params += @('--edit', "track:$sel", '--set', 'flag-forced=0'); $needsChange = $true }
+                    if ($t.properties.flag_hearing_impaired) { $Params += @('--edit', "track:$sel", '--set', 'flag-hearing-impaired=0'); $needsChange = $true }
                 }
-            } # End of the foreach ($t in $currentGroup.Json.tracks) loop
+            } # <--- END TRACK LOOP
 
-
-            # 3. EXECUTION: Only copy and modify if $needsChange is true
+            # 3. EXECUTION
             if ($Fix -and $needsChange) {
-                if ($NoBackup) {
-                    $targetFile = $fToFix.FullName
-                } else {
+                if ($NoBackup) { $targetFile = $fToFix.FullName } 
+                else {
                     Invoke-MkvBackup -FilePath $fToFix.FullName
                     $currentFolder = Get-Item -LiteralPath (Split-Path $fToFix.FullName -Parent)
-                    $parentDir = Split-Path $currentFolder.FullName -Parent
                     $backupFolderName = "$($currentFolder.Name)_updated"
-                    $targetFile = Join-Path $parentDir $backupFolderName (Split-Path $fToFix.FullName -Leaf)
+                    $targetFile = Join-Path (Split-Path $currentFolder.FullName -Parent) $backupFolderName (Split-Path $fToFix.FullName -Leaf)
                 }
 
                 if ($targetFile -and (Test-Path -LiteralPath $targetFile)) {
-                    # --- DEBUG LINE: This shows you EXACTLY what is being sent ---
                     Write-Host "  [DEBUG] Command: mkvpropedit '$targetFile' $($Params -join ' ')" -ForegroundColor Yellow
-                    
-                    if ($Params.Count -gt 0) {
-                        & $mkvpropedit "$targetFile" @Params | Out-Null
-                        [void]$fixDetails.Add("  STATUS: Changes applied to -> $targetFile")
-                    } else {
-                        Write-Host "  [WARNING] No parameters generated! Check your -vid inputs." -ForegroundColor Red
-                        [void]$fixDetails.Add("  STATUS: FAILED - No parameters generated.")
-                    }
+                    & $mkvpropedit "$targetFile" @Params | Out-Null
+                    [void]$fixDetails.Add("  STATUS: Changes applied to -> $targetFile")
                 }
-            } else {
-                [void]$fixDetails.Add("  STATUS: No changes required (Already matches defaults).")
             }
 
             [void]$fixDetails.Add(""); $fixDetails | Out-File $fixerLog -Append -Encoding utf8
-       } # End of Files Loop ($fToFix)
-    } # End of Groups Loop ($orderedGroups)
-    Write-Host "" 
+        } # <--- END FILES LOOP
+    } # <--- END GROUPS LOOP
 
-    
-
-	# --- HEART SPACER ---
+    # --- LOG SUMMARIES ---
     $spacer = "`r`n.• ♬ ͜͝ ̣̣♡.• ♬ ͜͝ ̣̣♡.• ♬ ͜͝ ̣̣♡..• ♬ ͜͝ ̣̣♡.• ♬ ͜͝ ̣̣♡.• ♬ ͜͝ ̣̣♡..• ♬ ͜͝ ̣̣♡.• ♬ ͜͝ ̣̣♡.• ♬ ͜͝ ̣̣♡.`r`n"
     $spacer | Out-File $detailLog -Append -Encoding utf8
-	
-	# --- COMPARISON LOG SUMMARY ---
-    $matchStatus = if ($mismatches -eq 0) { 
-        "✔+++All Files in Folder Match: YES ($($mkvFiles.Count))+++✔" 
-    } else { 
-        "❌+++All Files in Folder Match: NO (0)+++❌" 
-    }
-
+    
     $compEntry = New-Object System.Collections.Generic.List[string]
-    $compEntry.Add("Folder: $($folder.FullName)")
+    $compEntry.Add("Folder: $($folderPath.FullName)")
     $compEntry.Add($matchStatus)
-    $compEntry.Add("Total: $($mkvFiles.Count) | Matches Primary: $($primaryGroup.Files.Count) | Mismatches: $mismatches")
-    $compEntry.Add("") 
-
+    $compEntry.Add("Total: $($mkvFiles.Count) | Matches Primary: $($primaryGroup.Files.Count) | Mismatches: $mismatches`r`n")
     $compEntry | Out-File $compLog -Append -Encoding utf8
-}
+} # <--- END FOLDER LOOP (Line 284)
+
 Write-Host "Complete." -ForegroundColor Cyan
 Pause
