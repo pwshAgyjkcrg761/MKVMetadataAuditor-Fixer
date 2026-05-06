@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: auditor+fixer.ps1
-# VERSION: v2026.05.05_17.15.00
+# VERSION: v2026.05.06_17.20.00
 # TARGET: PowerShell 7.6.1 LTS
 # ==============================================================================
 # <PROTECTED>
@@ -24,7 +24,10 @@ param (
     [string[]]$PathParts,
     
     [switch]$Fix,        # Activates the Fixer module
-    [switch]$NoBackup,    # Disables the automatic 1-by-1 backup
+    [switch]$FixDebug,
+	[switch]$FixNoBackup,    # Disables the automatic 1-by-1 backup
+	[Alias("Honorifics")]
+    [switch]$Hon,          # New switch for Honorifics mode
 	[Alias("ovrd")]
     [switch]$overrideDefaults,
 	
@@ -137,15 +140,33 @@ if ($subtitleCodecPriority) {
     $defaultSettings.Subtitles.CodecPriority = @($translated)
 }
 
+# 2.5 VALIDATION: Require -ovrd for parameter usage
+$usedFlags = @()
+if ($PSBoundParameters.ContainsKey('videoLanguage')) { $usedFlags += "-vid" }
+if ($PSBoundParameters.ContainsKey('audioLanguagePriority')) { $usedFlags += "-aud" }
+if ($PSBoundParameters.ContainsKey('subtitleLanguagePriority')) { $usedFlags += "-sub" }
+if ($PSBoundParameters.ContainsKey('subtitleCodecPriority')) { $usedFlags += "-sc" }
+
+if ($usedFlags.Count -gt 0 -and -not $overrideDefaults) {
+    Write-Host "==================================================" -ForegroundColor Red
+    Write-Host "ERROR: Parameter Override Detected" -ForegroundColor Red
+    Write-Host "The following flags were used: $($usedFlags -join ' ')" -ForegroundColor Yellow
+    Write-Host "To use these, you MUST also include the -ovrd (or -overrideDefaults) switch." -ForegroundColor White
+    Write-Host "This ensures your changes are saved to the config file." -ForegroundColor White
+    Write-Host "==================================================" -ForegroundColor Red
+    Pause; exit
+}
+
 # 3. SAVE / LOAD LOGIC
+$configSource = "Built-in Defaults"
 if ($overrideDefaults) {
     $defaultSettings | ConvertTo-Json -Depth 10 | Out-File $configFile -Encoding utf8
-    Write-Host "CONFIG: Settings updated and saved to $configFile" -ForegroundColor Green
+    $configSource = "Updated & Saved to JSON"
 }
 
 if (Test-Path $configFile) {
     $fixerConfig = Get-Content $configFile | ConvertFrom-Json
-    # CRITICAL: If Video is missing from an old JSON, add it now
+    $configSource = "Loaded from JSON"
     if (-not $fixerConfig.PSObject.Properties['Video']) {
         $fixerConfig | Add-Member -MemberType NoteProperty -Name "Video" -Value $defaultSettings.Video
     }
@@ -154,12 +175,22 @@ if (Test-Path $configFile) {
 }
 
 # --- STARTUP DISPLAY ---
-#Clear-Host
-$version = "2026.05.05_17.15.00"
+Clear-Host
+$version = "2026.05.06_17.20.00"
 Write-Host "=================================================="
 Write-Host "auditor+fixer.ps1 v$version" -ForegroundColor Cyan
 Write-Host "=================================================="
+Write-Host "Config Status: " -NoNewline; Write-Host $configSource -ForegroundColor Yellow
+Write-Host "Config Path:   " -NoNewline; Write-Host $configFile -ForegroundColor DarkGray
+Write-Host "--------------------------------------------------"
+Write-Host "LOADED OPTIONS:" -ForegroundColor White
+Write-Host "  Video Target: " -NoNewline; Write-Host "$($fixerConfig.Video.TargetLanguage)" -ForegroundColor Magenta
+Write-Host "  Audio Target: " -NoNewline; Write-Host "$($fixerConfig.Audio.PreferredLanguage)" -ForegroundColor Magenta
+Write-Host "  Sub Target:   " -NoNewline; Write-Host "$($fixerConfig.Subtitles.PreferredLanguage)" -ForegroundColor Magenta
+Write-Host "  Sub Codecs:   " -NoNewline; Write-Host "$($fixerConfig.Subtitles.CodecPriority -join ', ')" -ForegroundColor Magenta
+Write-Host "--------------------------------------------------"
 #Write-Host "Script Location: " -NoNewline; Write-Host "$PSScriptRoot" -ForegroundColor Yellow
+#Write-Host "--------------------------------------------------"
 Write-Host "Target Folder(s):" -ForegroundColor White
 foreach ($p in $inputPaths) { Write-Host "  -> $p" -ForegroundColor Magent }
 Write-Host "--------------------------------------------------"
@@ -477,6 +508,7 @@ foreach ($folderPath in $targetFolders) {
             $Params = @() 
             $needsChange = $false 
             $bestAudioSel = $null; $bestSubSel = $null; $foundPrefAudio = $false
+			$subCandidates = @()
 
             [void]$fixDetails.Add("FILE: $($fToFix.FullName)")
 
@@ -492,7 +524,7 @@ foreach ($folderPath in $targetFolders) {
             foreach ($t in $currentGroup.Json.tracks) {
                 $sel = Get-Selector $t.type
                 
-                # --- VIDEO ---
+                # --- VIDEO LOGIC ---
                 if ($t.type -eq "video") {
                     # 1. Resolve the target language from your -vid chi command
                     $targetLangInput = if ($videoLanguage) { $videoLanguage } else { $fixerConfig.Video.TargetLanguage }
@@ -503,7 +535,8 @@ foreach ($folderPath in $targetFolders) {
                     
                     if ($isIncorrect) {
                         # 3. Add the mkvpropedit command
-                        $Params += @('--edit', "track:$sel", '--set', "language=$target", '--set', "flag-default=1")
+                        $mkvID = $t.id + 1
+						$Params += @('--edit', "track:$mkvID", '--set', "language=$target", '--set', "flag-default=1")
                         
                         # 4. LOGGING: Horizontal pipe-separated format
                         $logReason = if ($videoForceUpdate) { "Video Force (-vidf)" } else { "Passive Update (-vid)" }
@@ -521,22 +554,113 @@ foreach ($folderPath in $targetFolders) {
                         $bestAudioSel = $sel; $foundPrefAudio = $true
                     }
                 }
-                if ($t.type -eq "subtitles" -and $t.properties.language -eq $fixerConfig.Subtitles.PreferredLanguage) {
-                    if ($t.properties.track_name -notmatch $fixerConfig.Subtitles.IgnoreNames) { $bestSubSel = $sel }
+                
+				# --- SUBTITLES ---
+                if ($t.type -eq "subtitles") {
+                    $trackName = if ($t.properties.track_name) { $t.properties.track_name.ToLower() } else { "" }
+                    $trackLang = $t.properties.language.ToLower()
+                    
+                    # 1. ALWAYS capture current default status so we can strip it later if needed
+                    $isCurrentlyDefault = ($t.properties.default_track -eq $true)
+                    
+                    # 2. Determine if it's a priority track (Codec Match)
+                    $isCodecMatch = $false
+                    foreach ($c in $fixerConfig.Subtitles.CodecPriority) {
+                        if ($t.codec -match $c) { $isCodecMatch = $true; break }
+                    }
+
+                    # 3. SCORING
+                    $score = 0
+                    if ($isCodecMatch) { $score += 50 }
+                    
+                    # Priority for Dialogue / Penalty for Signs & Songs
+                    if ($trackName -match "Dialogue|Full Sub") { $score += 150 }
+                    if ($trackName -match "Signs|Songs|Lyrics") { $score -= 200 } # Heavy penalty
+                    
+                    if ($Hon -and (($trackName -match "honorifics|honors") -or ($trackLang -eq "enm"))) { $score += 300 }
+                    if ($trackLang -eq $fixerConfig.Subtitles.PreferredLanguage) { $score += 1 }
+
+                    # 4. ADD TO LIST (No filter here - we need to see the "bad" tracks to fix them)
+                    $subCandidates += [PSCustomObject]@{
+                        ID         = $t.id
+                        Score      = $score
+                        Lang       = $trackLang
+                        Name       = $t.properties.track_name
+                        WasDefault = $isCurrentlyDefault
+                    }
+                    continue 
+                } # <--- This is the first brace you were seeing
+
+                # --- APPLY GLOBAL FLAG RESETS (Audio only here, Subs handled after loop) ---
+                if ($fixerConfig.Global.ResetAllFlags -and ($t.type -eq "audio")) {
+                    $mkvID = $t.id + 1 # Calculate absolute ID
+                    
+                    # Check if this specific track is the one we want as default
+                    $targetDefault = if ($sel -eq $bestAudioSel) { 1 } else { 0 }
+                    
+                    if ($t.properties.default_track -ne $targetDefault) { 
+                        $Params += @('--edit', "track:$mkvID", '--set', "flag-default=$targetDefault")
+                        $needsChange = $true 
+                    }
+                    if ($t.properties.forced_track) { 
+                        $Params += @('--edit', "track:$mkvID", '--set', 'flag-forced=0')
+                        $needsChange = $true 
+                    }
+                    if ($t.properties.flag_hearing_impaired) { 
+                        $Params += @('--edit', "track:$mkvID", '--set', 'flag-hearing-impaired=0')
+                        $needsChange = $true 
+                    }
+				}
+            } # <--- END TRACK LOOP
+			
+			# --- CHOOSE BEST SUBTITLE & RESET OTHER SUB FLAGS ---
+            if ($subCandidates.Count -gt 0) {
+                $winner = $subCandidates | Sort-Object Score -Descending | Select-Object -First 1
+                $targetSubLang = "eng" 
+                $subReason = if ($Hon -and ($winner.Score -ge 100)) { "Preferred Honorifics ($($winner.Lang))" } else { "Primary ENG Sub" }
+                
+                $currentWinnerData = $currentGroup.Json.tracks | Where-Object { $_.id -eq $winner.ID }
+                
+                # 1. Check if the Winner needs updating
+                $winnerNeedsFix = ($currentWinnerData.properties.language -ne $targetSubLang) -or ($currentWinnerData.properties.default_track -ne $true)
+                
+                # 2. Check if ANY other track is wrongly set to Default
+                $losersNeedStrip = $false
+                foreach ($sub in $subCandidates) {
+                    if ($sub.ID -ne $winner.ID) {
+                        $lostTrack = $currentGroup.Json.tracks | Where-Object { $_.id -eq $sub.ID }
+                        if ($lostTrack.properties.default_track -eq $true) { 
+                            $losersNeedStrip = $true 
+                            break 
+                        }
+                    }
                 }
 
-                # --- APPLY FLAGS ---
-                if ($fixerConfig.Global.ResetAllFlags -and ($t.type -match "audio|subtitles")) {
-                    $targetDefault = if ($sel -eq $bestAudioSel -or $sel -eq $bestSubSel) { 1 } else { 0 }
-                    if ($t.properties.default_track -ne $targetDefault) { $Params += @('--edit', "track:$sel", '--set', "flag-default=$targetDefault"); $needsChange = $true }
-                    if ($t.properties.forced_track) { $Params += @('--edit', "track:$sel", '--set', 'flag-forced=0'); $needsChange = $true }
-                    if ($t.properties.flag_hearing_impaired) { $Params += @('--edit', "track:$sel", '--set', 'flag-hearing-impaired=0'); $needsChange = $true }
-                }
-            } # <--- END TRACK LOOP
+                # 3. MECHANICAL TRIGGER: If either condition is true, build the command
+                if ($winnerNeedsFix -or $losersNeedStrip) {
+                    $needsChange = $true
+					
+					# FIX: Define $winID before using it
+                    $winID = $winner.ID + 1
+                    
+                    # Add Winner Fix
+                $Params += @('--edit', "track:$winID", '--set', "language=$targetSubLang", '--set', "flag-default=1", '--set', "flag-forced=0", '--set', "flag-hearing-impaired=0")
+                [void]$fixDetails.Add("  ACTION: SET_LANG=$targetSubLang | SET_DEFAULT=1 | TRACK: $winID | REASON: $subReason")
+
+                # Add Loser Strips
+                    foreach ($sub in $subCandidates) {
+                        if ($sub.ID -ne $winner.ID) {
+                            $loseID = $sub.ID + 1
+                            $Params += @('--edit', "track:$loseID", '--set', "flag-default=0", '--set', "flag-forced=0", '--set', "flag-hearing-impaired=0")
+                        }
+                    }
+                } # <--- THIS IS THE ONE YOU ARE MISSING (Closes Mechanical Trigger)
+            }
+
 
             # 3. EXECUTION
             if ($Fix -and $needsChange) {
-                if ($NoBackup) { $targetFile = $fToFix.FullName } 
+                if ($FixNoBackup) { $targetFile = $fToFix.FullName } 
                 else {
                     Invoke-MkvBackup -FilePath $fToFix.FullName
                     $currentFolder = Get-Item -LiteralPath (Split-Path $fToFix.FullName -Parent)
@@ -545,17 +669,19 @@ foreach ($folderPath in $targetFolders) {
                 }
 
                 if ($targetFile -and (Test-Path -LiteralPath $targetFile)) {
-                    Write-Host "  [DEBUG] Command: mkvpropedit '$targetFile' $($Params -join ' ')" -ForegroundColor Yellow
+                    if ($FixDebug) {
+                        $fullCmd = "mkvpropedit `"$targetFile`" $($Params -join ' ')"
+                        Write-Host "  [DEBUG] $fullCmd" -ForegroundColor Yellow
+                        [void]$fixDetails.Add("  DEBUG_CMD: $fullCmd")
+                    }
                     & $mkvpropedit "$targetFile" @Params | Out-Null
                     [void]$fixDetails.Add("  STATUS: Changes applied to -> $targetFile")
                 }
             }
-
             [void]$fixDetails.Add(""); $fixDetails | Out-File $fixerLog -Append -Encoding utf8
         } # <--- END FILES LOOP
     } # <--- END GROUPS LOOP
 
-    # --- LOG SUMMARIES ---
     $spacer = "`r`n.• ♬ ͜͝ ̣̣♡.• ♬ ͜͝ ̣̣♡.• ♬ ͜͝ ̣̣♡..• ♬ ͜͝ ̣̣♡.• ♬ ͜͝ ̣̣♡.• ♬ ͜͝ ̣̣♡..• ♬ ͜͝ ̣̣♡.• ♬ ͜͝ ̣̣♡.• ♬ ͜͝ ̣̣♡.`r`n"
     $spacer | Out-File $detailLog -Append -Encoding utf8
     
@@ -564,7 +690,7 @@ foreach ($folderPath in $targetFolders) {
     $compEntry.Add($matchStatus)
     $compEntry.Add("Total: $($mkvFiles.Count) | Matches Primary: $($primaryGroup.Files.Count) | Mismatches: $mismatches`r`n")
     $compEntry | Out-File $compLog -Append -Encoding utf8
-} # <--- END FOLDER LOOP (Line 284)
+} # <--- END FOLDER LOOP
 
 Write-Host "Complete." -ForegroundColor Cyan
 Pause
