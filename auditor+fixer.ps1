@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: auditor+fixer.ps1
-# VERSION: v2026.05.06_17.20.00
+# VERSION: v2026.05.07_13.00.00
 # TARGET: PowerShell 7.6.1 LTS
 # ==============================================================================
 # <PROTECTED>
@@ -176,7 +176,7 @@ if (Test-Path $configFile) {
 
 # --- STARTUP DISPLAY ---
 Clear-Host
-$version = "2026.05.06_17.20.00"
+$version = "2026.05.07_13.00.00"
 Write-Host "=================================================="
 Write-Host "auditor+fixer.ps1 v$version" -ForegroundColor Cyan
 Write-Host "=================================================="
@@ -214,27 +214,45 @@ function Get-Selector {
     return "$letter$val"
 }
 
+function Get-Selector {
+    param($type, [switch]$Reset)
+    if ($Reset) { $global:trackCounters = @{ "video" = 1; "audio" = 1; "subtitles" = 1 }; return "" }
+    $val = $global:trackCounters[$type]
+    $letter = switch ($type) { "video" { "v" } "audio" { "a" } "subtitles" { "s" } }
+    $global:trackCounters[$type]++
+    return "$letter$val"
+}
+
 function Invoke-MkvBackup {
-    param([string]$FilePath)
+    param([string]$FilePath, [string]$RootPath)
     
-    # 1. Get the current folder and its parent
-    $currentFolder = Get-Item -LiteralPath (Split-Path $FilePath -Parent)
-    $parentDir = Split-Path $currentFolder.FullName -Parent
+    # 1. Identify the relationship between the file and the dragged folder (RootPath)
+    $fileItem = Get-Item -LiteralPath $FilePath
     
-    # 2. Construct the new backup folder name: "ParentFolderName_updated"
-    $backupFolderName = "$($currentFolder.Name)_updated"
-    $backupPath = Join-Path $parentDir $backupFolderName
+    # 2. Determine the Backup Root Name
+    # We anchor to the parent of the folder you dropped so the _updated folder is a sibling
+    $parentDir = Split-Path $RootPath -Parent
+    $rootName = Split-Path $RootPath -Leaf
+    $backupRootPath = Join-Path $parentDir "$($rootName)_updated"
     
-    # 3. Create the folder if it doesn't exist
-    if (-not (Test-Path -LiteralPath $backupPath)) { 
-        New-Item -Path $backupPath -ItemType Directory | Out-Null 
-        Write-Host "  [BACKUP] Created directory: $backupFolderName" -ForegroundColor Cyan
+    # 3. Calculate the relative internal structure
+    $relativeDir = ""
+    if ($FilePath.StartsWith($RootPath)) {
+        $relativeDir = (Split-Path $FilePath -Parent).Substring($RootPath.Length).TrimStart('\')
     }
     
-    # 4. Copy the file
+    # 4. Construct the final target directory
+    $finalDestinationDir = Join-Path $backupRootPath $relativeDir
+    
+    # 5. Create the folder tree if it doesn't exist
+    if (-not (Test-Path -LiteralPath $finalDestinationDir)) { 
+        New-Item -Path $finalDestinationDir -ItemType Directory -Force | Out-Null 
+    }
+    
+    # 6. Copy the file
     $fileName = Split-Path $FilePath -Leaf
-    Write-Host "  [BACKUP] Copying to ${backupFolderName}: $fileName..." -ForegroundColor Gray
-    Copy-Item -LiteralPath $FilePath -Destination (Join-Path $backupPath $fileName) -Force
+    Write-Host "  [BACKUP] Copying: $fileName..." -ForegroundColor Gray
+    Copy-Item -LiteralPath $FilePath -Destination (Join-Path $finalDestinationDir $fileName) -Force
 }
 
 function Get-AuditFlags($tracks) {
@@ -621,15 +639,23 @@ foreach ($folderPath in $targetFolders) {
                 
                 $currentWinnerData = $currentGroup.Json.tracks | Where-Object { $_.id -eq $winner.ID }
                 
-                # 1. Check if the Winner needs updating
-                $winnerNeedsFix = ($currentWinnerData.properties.language -ne $targetSubLang) -or ($currentWinnerData.properties.default_track -ne $true)
+                # 1. Check if the Winner needs updating (Lang, Default, or unwanted Forced/HICC)
+                $winnerNeedsFix = ($currentWinnerData.properties.language -ne $targetSubLang) -or 
+                                  ($currentWinnerData.properties.default_track -ne $true) -or
+                                  ($currentWinnerData.properties.forced_track -eq $true) -or
+                                  ($currentWinnerData.properties.flag_hearing_impaired -eq $true)
                 
-                # 2. Check if ANY other track is wrongly set to Default
+                # 2. Check if ANY other track is wrongly set to Default, Forced, HI/CC, or has SDH in name
                 $losersNeedStrip = $false
                 foreach ($sub in $subCandidates) {
                     if ($sub.ID -ne $winner.ID) {
                         $lostTrack = $currentGroup.Json.tracks | Where-Object { $_.id -eq $sub.ID }
-                        if ($lostTrack.properties.default_track -eq $true) { 
+                        $hasSDH = $lostTrack.properties.name -like "*SDH*"
+                        
+                        if ($lostTrack.properties.default_track -or 
+                            $lostTrack.properties.forced_track -or 
+                            $lostTrack.properties.flag_hearing_impaired -or
+                            $hasSDH) { 
                             $losersNeedStrip = $true 
                             break 
                         }
@@ -647,25 +673,44 @@ foreach ($folderPath in $targetFolders) {
                 $Params += @('--edit', "track:$winID", '--set', "language=$targetSubLang", '--set', "flag-default=1", '--set', "flag-forced=0", '--set', "flag-hearing-impaired=0")
                 [void]$fixDetails.Add("  ACTION: SET_LANG=$targetSubLang | SET_DEFAULT=1 | TRACK: $winID | REASON: $subReason")
 
-                # Add Loser Strips
+                # Add Loser Strips & Rename SDH to CC
                     foreach ($sub in $subCandidates) {
                         if ($sub.ID -ne $winner.ID) {
+                            $lostTrack = $currentGroup.Json.tracks | Where-Object { $_.id -eq $sub.ID }
                             $loseID = $sub.ID + 1
+                            
+                            # Try to find the name in either common property location
+                            $currentName = $lostTrack.properties.name
+                            if (-not $currentName) { $currentName = $lostTrack.properties.track_name }
+
+                            # Start the edit for this track
                             $Params += @('--edit', "track:$loseID", '--set', "flag-default=0", '--set', "flag-forced=0", '--set', "flag-hearing-impaired=0")
+                            
+                            # If we found a name and it contains SDH, apply the fix
+                            if ($currentName -and $currentName -like "*SDH*") {
+                                $newName = $currentName -replace "SDH", "CC"
+                                $Params += @('--set', "name=$newName")
+                            }
                         }
-                    }
-                } # <--- THIS IS THE ONE YOU ARE MISSING (Closes Mechanical Trigger)
-            }
+                    } # Closes foreach
+                } # Closes Mechanical Trigger (if $winnerNeedsFix -or $losersNeedStrip)
+            } # Closes Subtitle Logic Block
 
 
             # 3. EXECUTION
             if ($Fix -and $needsChange) {
                 if ($FixNoBackup) { $targetFile = $fToFix.FullName } 
                 else {
-                    Invoke-MkvBackup -FilePath $fToFix.FullName
-                    $currentFolder = Get-Item -LiteralPath (Split-Path $fToFix.FullName -Parent)
-                    $backupFolderName = "$($currentFolder.Name)_updated"
-                    $targetFile = Join-Path (Split-Path $currentFolder.FullName -Parent) $backupFolderName (Split-Path $fToFix.FullName -Leaf)
+                    # Anchor to the first path in $inputPaths (the one you dropped)
+                    $anchorRoot = $inputPaths[0]
+                    Invoke-MkvBackup -FilePath $fToFix.FullName -RootPath $anchorRoot
+                    
+                    $parentDir = Split-Path $anchorRoot -Parent
+                    $rootName = Split-Path $anchorRoot -Leaf
+                    $backupRootPath = Join-Path $parentDir "$($rootName)_updated"
+                    
+                    $relativeDir = (Split-Path $fToFix.FullName -Parent).Substring($anchorRoot.Length).TrimStart('\')
+                    $targetFile = Join-Path $backupRootPath $relativeDir (Split-Path $fToFix.FullName -Leaf)
                 }
 
                 if ($targetFile -and (Test-Path -LiteralPath $targetFile)) {
