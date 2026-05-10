@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: auditor+fixer.ps1
-# VERSION: v2026.05.07_13.00.00
+# VERSION: v2026.05.09_23.30.00
 # TARGET: PowerShell 7.6.1 LTS
 #
 # Copyright (C) 2026 pwsh.Agyjkcrg761
@@ -44,6 +44,8 @@ param (
     [Alias("aud")] [string]$audioLanguagePriority,
     [Alias("sub")] [string]$subtitleLanguagePriority,
     [Alias("sc")]  [string]$subtitleCodecPriority
+    
+    
 )
 
 # --- PLACE THE TRAP HERE INSTEAD ---
@@ -183,7 +185,7 @@ if (Test-Path $configFile) {
 
 # --- STARTUP DISPLAY ---
 Clear-Host
-$version = "2026.05.07_13.00.00"
+$version = "2026.05.09_23.30.00"
 Write-Host "=================================================="
 Write-Host "auditor+fixer.ps1 v$version" -ForegroundColor Cyan
 Write-Host "=================================================="
