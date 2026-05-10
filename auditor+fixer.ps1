@@ -2,6 +2,13 @@
 # SCRIPT: auditor+fixer.ps1
 # VERSION: v2026.05.07_13.00.00
 # TARGET: PowerShell 7.6.1 LTS
+#
+# Copyright (C) 2026 pwsh.Agyjkcrg761
+# 
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
 # ==============================================================================
 # <PROTECTED>
 # ==============================================================================
@@ -13,9 +20,9 @@
 #    - STAMP ACCURACY: Ensure the minutes match the current Chicago clock exactly.
 # 2. DO NOT modify or refactor any code inside <PROTECTED> tags.
 # 3. SCRIPT OUTPUT:
-#	 - When printing the script only print snippets unless asked for entire script.
-#	 - Always use a codebox with a copy button.
-#	 - Show a clear beginning and end to the new code with and example of where to insert.
+#    - When printing the script only print snippets unless asked for entire script.
+#    - Always use a codebox with a copy button.
+#    - Show a clear beginning and end to the new code with and example of where to insert.
 # ==============================================================================
 # </PROTECTED>
 
@@ -25,15 +32,15 @@ param (
     
     [switch]$Fix,        # Activates the Fixer module
     [switch]$FixDebug,
-	[switch]$FixNoBackup,    # Disables the automatic 1-by-1 backup
-	[Alias("Honorifics")]
+    [switch]$FixNoBackup,    # Disables the automatic 1-by-1 backup
+    [Alias("Honorifics")]
     [switch]$Hon,          # New switch for Honorifics mode
-	[Alias("ovrd")]
+    [Alias("ovrd")]
     [switch]$overrideDefaults,
-	
-	# New Automation Params
-	[Alias("vid")] [string]$videoLanguage,
-	[Alias("vidf")] [switch]$videoForceUpdate,
+    
+    # New Automation Params
+    [Alias("vid")] [string]$videoLanguage,
+    [Alias("vidf")] [switch]$videoForceUpdate,
     [Alias("aud")] [string]$audioLanguagePriority,
     [Alias("sub")] [string]$subtitleLanguagePriority,
     [Alias("sc")]  [string]$subtitleCodecPriority
@@ -329,7 +336,7 @@ if ($inputPaths.Count -gt 0) {
     $targetFolders = @($inputPaths | ForEach-Object { Get-Item -LiteralPath $_ }) + $targetFolders | Select-Object -Unique
 }
 foreach ($folderPath in $targetFolders) {
-	Write-Host "Checking: $($folderPath.FullName)..." -ForegroundColor Gray # <--- LIVE FEEDBACK
+    Write-Host "Checking: $($folderPath.FullName)..." -ForegroundColor Gray # <--- LIVE FEEDBACK
     $global:GroupMap = @{}
     $global:Counter = 1
     $folder = Get-Item -LiteralPath $folderPath.FullName
@@ -419,7 +426,7 @@ foreach ($folderPath in $targetFolders) {
 
     $primaryGroup = $orderedGroups[0]
     $mismatches = $mkvFiles.Count - $primaryGroup.Files.Count
-	
+    
     # Print folder header to mismatch log if needed
     if ($mismatches -gt 0) {
         $spacer = if (Test-Path $missLog) { "`r`n" } else { "" }
@@ -433,13 +440,13 @@ foreach ($folderPath in $targetFolders) {
         
         # Progress Bar Update
         Write-InlineProgress -Current ($g + 1) -Total $totalGroups -Message "Processing Groups"
-		
+        
         $sig = $currentGroup.Sig
         if (-not $global:GroupMap.ContainsKey($sig)) { $global:GroupMap[$sig] = $global:GroupMap.Count + 1 }
         $stableIndex = $global:GroupMap[$sig]
         $isPrimary = ($g -eq 0)
         $repFile = $currentGroup.Files[0]
-		$reasons = Get-AuditFlags $currentGroup.Json.tracks
+        $reasons = Get-AuditFlags $currentGroup.Json.tracks
         
         $entry = New-Object System.Collections.Generic.List[string]
         if ($g -gt 0) { $entry.Add("") }
@@ -462,10 +469,10 @@ foreach ($folderPath in $targetFolders) {
         # Limit filename in title to 40 characters
         $shortName = if ($repFile.Name.Length -gt 40) { $repFile.Name.Substring(0, 40) } else { $repFile.Name }
         
-		
+        
         if ($isPrimary) {
-			$entry.Add("--- $label [$shortName] MKV AUDIT: $($repFile.FullName) ---")
-			$entry.Add("FILE NAME: $($repFile.Name)")
+            $entry.Add("--- $label [$shortName] MKV AUDIT: $($repFile.FullName) ---")
+            $entry.Add("FILE NAME: $($repFile.Name)")
             # If there are NO audit flags, it is Reference Only.
             # If there ARE flags, show only the flags and drop the Reference label.
             if ($reasons -eq "") {
@@ -481,17 +488,17 @@ foreach ($folderPath in $targetFolders) {
             }
             $entry.Add($matchStatus)
         } else {
-			# Mismatched Header (Secondary 02+)
-			$entry.Add("--- $label [$shortName] +MISMATCHED+ MKV: $($repFile.FullName) ---")
-			$entry.Add("Primary: $($primaryGroup.Files[0].Name)")
-			
-			# Updated to show Reference Only for Secondary groups too
+            # Mismatched Header (Secondary 02+)
+            $entry.Add("--- $label [$shortName] +MISMATCHED+ MKV: $($repFile.FullName) ---")
+            $entry.Add("Primary: $($primaryGroup.Files[0].Name)")
+            
+            # Updated to show Reference Only for Secondary groups too
             if ($reasons -eq "") {
                 $entry.Add("REASON: 💎[Reference Only]")
             } else {
                 $entry.Add("REASON: $reasons")
             }
-			
+            
         } 
 
         # --- OUTPUT TRIGGER ---
@@ -502,31 +509,31 @@ foreach ($folderPath in $targetFolders) {
             & $script:PrintTable $currentGroup.Json "" $null
         }
 
-	
+    
 
         # --- MATCHES SECTION WITH 1-10 NUMBERING ---
         $entry.Add("")
-		$entry.Add("===Matches ${label} [$shortName]: $($currentGroup.Files.Count.ToString('00'))===")
+        $entry.Add("===Matches ${label} [$shortName]: $($currentGroup.Files.Count.ToString('00'))===")
         for ($i = 0; $i -lt $currentGroup.Files.Count; $i++) {
             $entry.Add("  - $($currentGroup.Files[$i].Name)")
         }
 
         # --- APPEND TO MASTER LOG ---
         $entry | Out-File $detailLog -Append -Encoding utf8
-		
-		# --- APPEND TO MISMATCH LOG (ONLY IF NOT PRIMARY) ---
+        
+        # --- APPEND TO MISMATCH LOG (ONLY IF NOT PRIMARY) ---
         # If the folder has ANY mismatches, include EVERY group (Primary + Mismatches)
         if ($mismatches -gt 0) {
             $entry | Out-File $missLog -Append -Encoding utf8
         }
-		
-		# --- GENERATE FIXER QUEUE & EXECUTE SMART FIX ---
+        
+        # --- GENERATE FIXER QUEUE & EXECUTE SMART FIX ---
         foreach ($fToFix in $currentGroup.Files) {
             $fixDetails = New-Object System.Collections.Generic.List[string]
             $Params = @() 
             $needsChange = $false 
             $bestAudioSel = $null; $bestSubSel = $null; $foundPrefAudio = $false
-			$subCandidates = @()
+            $subCandidates = @()
 
             [void]$fixDetails.Add("FILE: $($fToFix.FullName)")
 
@@ -554,7 +561,7 @@ foreach ($folderPath in $targetFolders) {
                     if ($isIncorrect) {
                         # 3. Add the mkvpropedit command
                         $mkvID = $t.id + 1
-						$Params += @('--edit', "track:$mkvID", '--set', "language=$target", '--set', "flag-default=1")
+                        $Params += @('--edit', "track:$mkvID", '--set', "language=$target", '--set', "flag-default=1")
                         
                         # 4. LOGGING: Horizontal pipe-separated format
                         $logReason = if ($videoForceUpdate) { "Video Force (-vidf)" } else { "Passive Update (-vid)" }
@@ -573,7 +580,7 @@ foreach ($folderPath in $targetFolders) {
                     }
                 }
                 
-				# --- SUBTITLES ---
+                # --- SUBTITLES ---
                 if ($t.type -eq "subtitles") {
                     $trackName = if ($t.properties.track_name) { $t.properties.track_name.ToLower() } else { "" }
                     $trackLang = $t.properties.language.ToLower()
@@ -628,10 +635,10 @@ foreach ($folderPath in $targetFolders) {
                         $Params += @('--edit', "track:$mkvID", '--set', 'flag-hearing-impaired=0')
                         $needsChange = $true 
                     }
-				}
+                }
             } # <--- END TRACK LOOP
-			
-			# --- CHOOSE BEST SUBTITLE & RESET OTHER SUB FLAGS ---
+            
+            # --- CHOOSE BEST SUBTITLE & RESET OTHER SUB FLAGS ---
             if ($subCandidates.Count -gt 0) {
                 $winner = $subCandidates | Sort-Object Score -Descending | Select-Object -First 1
                 $targetSubLang = "eng" 
@@ -665,8 +672,8 @@ foreach ($folderPath in $targetFolders) {
                 # 3. MECHANICAL TRIGGER: If either condition is true, build the command
                 if ($winnerNeedsFix -or $losersNeedStrip) {
                     $needsChange = $true
-					
-					# FIX: Define $winID before using it
+                    
+                    # FIX: Define $winID before using it
                     $winID = $winner.ID + 1
                     
                     # Add Winner Fix
