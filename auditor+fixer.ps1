@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: auditor+fixer.ps1
-# VERSION: v2026.05.10_00.30.00
+# VERSION: v2026.05.10_13.30.00
 # TARGET: PowerShell 7.6.1 LTS
 #
 # Copyright (C) 2026 pwsh.Agyjkcrg761
@@ -46,41 +46,112 @@ param (
     [Alias("sub")] [string]$subtitleLanguagePriority,
     [Alias("sc")]  [string]$subtitleCodecPriority,
     
-    [Parameter(Mandatory=$false)]
+    #[Parameter(Mandatory=$false)]
     [switch]$Help,
 
-    [Parameter(Mandatory=$false)]
+    #[Parameter(Mandatory=$false)]
     [switch]$Manual
     
 )
 
 # --- HELP & MANUAL SYSTEM ---
-if ($Help -or $Manual -or $Args -contains '-?' -or $Args -contains '/?') {
+if ($Help -or $Manual) {
     Clear-Host
     Write-Host "============================================================" -ForegroundColor Cyan
-    Write-Host " $title - MANUAL & USAGE GUIDE" -ForegroundColor White
+    Write-Host " auditor+fixer.ps1 - MANUAL & USAGE GUIDE" -ForegroundColor DarkMagenta
+    Write-Host " Copyright (C) 2026 pwsh.Agyjkcrg761`n" -ForegroundColor DarkCyan
+    
+    Write-Host " This program is free software: you can redistribute it and/or" -ForegroundColor DarkMagenta
+    Write-Host " modify it under the terms of the GNU General Public License as" -ForegroundColor DarkMagenta
+    Write-Host " published by the Free Software Foundation, either version 3 of" -ForegroundColor DarkMagenta
+    Write-Host " the License, or (at your option) any later version." -ForegroundColor DarkMagenta
     Write-Host "============================================================" -ForegroundColor Cyan
     
-    Write-Host "`n USAGE:" -ForegroundColor Yellow
-    Write-Host "  .\auditor+fixer.ps1 [Flags] -Path 'G:\Media'"
-    
-    Write-Host "`n CORE FLAGS:" -ForegroundColor Yellow
-    Write-Host "  -Path <string>       Target directory for scanning." -ForegroundColor Gray
-    Write-Host "  -Fix                 Execute metadata changes (Mkvpropedit)." -ForegroundColor Gray
-    Write-Host "  -FixDebug            Enable verbose logging for troubleshooting." -ForegroundColor Gray
-    Write-Host "  -ovrd                Load/Create configuration override (JSON)." -ForegroundColor Gray
-    Write-Host "  -FixNoBackup         Run Fix mode without creating track backups." -ForegroundColor Gray
-    
-    Write-Host "`n TRACK PRIORITIES:" -ForegroundColor Yellow
-    Write-Host "  -audioLanguagePriority <string>     Set default audio (e.g., 'jpn')." -ForegroundColor Gray
-    Write-Host "  -subtitleLanguagePriority <string>  Set default subtitles (e.g., 'eng')." -ForegroundColor Gray
-    Write-Host "  -subtitleCodecPriority <string>     Prioritize codecs (e.g., 'S_TEXT/ASS')." -ForegroundColor Gray
-    Write-Host "  -Hon                                Include honorifics bonus in scoring." -ForegroundColor Gray
+    Write-Host "`n OVERVIEW:" -ForegroundColor DarkYellow
+    Write-Host "  This utility is a high-fidelity media management tool designed to ensure" -ForegroundColor DarkCyan
+    Write-Host "  structural consistency across MKV libraries. It operates in two stages:" -ForegroundColor DarkCyan
+    Write-Host "  1. AUDIT: Scans files to identify 'Mismatch Groups' and track errors." -ForegroundColor DarkCyan
+    Write-Host "  2. FIX:  Uses Mkvpropedit to align tracks with your preferred defaults." -ForegroundColor DarkCyan
 
-    Write-Host "`n NOTES:" -ForegroundColor Yellow
-    Write-Host "  * SCORING: Automatically penalizes 'Signs/Songs' tracks."
-    Write-Host "  * CONFIG: Settings persist via JSON when using -ovrd."
-    Write-Host "  * LOGS: Output is directed to the $mainLogDir folder." -ForegroundColor Gray
+    Write-Host "`n  The script intelligently handles track scoring, automatically penalizing" -ForegroundColor DarkCyan
+    Write-Host "  'Signs & Songs' tracks while prioritizing full dialogue and honorifics." -ForegroundColor DarkCyan
+    
+    Write-Host "`n USAGE:" -ForegroundColor DarkYellow
+    Write-Host "  .\auditor+fixer.ps1 [Flags] -Path 'G:\Media'" -ForegroundColor DarkGreen
+    
+    Write-Host "`n USAGE EXAMPLES:`n" -ForegroundColor DarkYellow
+    
+    Write-Host "  Standard Audit (No Changes):`n" -ForegroundColor DarkGray
+    Write-Host "    .\auditor+fixer.ps1 -Path 'G:\Media\Anime'`n" -ForegroundColor DarkMagenta
+    
+    Write-Host "  Automated Fix (JPN Audio / ENG Subs / Honorifics):`n" -ForegroundColor DarkGray
+    Write-Host "    .\auditor+fixer.ps1 -Fix -aud jpn -sub eng -Hon -ovrd -Path 'G:\Media\Anime'`n" -ForegroundColor DarkCyan
+    
+    Write-Host "  Update Video Language (Chinese) & Save to Config:`n" -ForegroundColor DarkGray
+    Write-Host "    .\auditor+fixer.ps1 -Fix -vid chi -vidf -ovrd -Path 'G:\Media\Anime'`n" -ForegroundColor DarkMagenta
+
+    Write-Host "  Direct Fix (No Backup) with Codec Priority:`n" -ForegroundColor DarkGray
+    Write-Host "    .\auditor+fixer.ps1 -Fix -FixNoBackup -sc 'ass,srt' -ovrd -Path 'G:\Media\Anime'`n" -ForegroundColor DarkCyan
+    
+    Write-Host "`n CORE FLAGS:`n" -ForegroundColor DarkYellow
+
+    Write-Host "  -Path <string>" -ForegroundColor DarkMagenta
+    Write-Host "      Defines the target directory. The script will recursively scan all" -ForegroundColor DarkMagenta
+    Write-Host "      subfolders for MKV files to perform bulk auditing.`n" -ForegroundColor DarkMagenta
+
+    Write-Host "  -Fix" -ForegroundColor DarkCyan
+    Write-Host "      Enables 'Write Mode'. Without this, the script runs in read-only" -ForegroundColor DarkCyan
+    Write-Host "      audit mode, generating logs without modifying any files.`n" -ForegroundColor DarkCyan
+                    
+    Write-Host "  -FixDebug" -ForegroundColor DarkMagenta
+    Write-Host "      Prints the exact Mkvpropedit command strings to the console before" -ForegroundColor DarkMagenta
+    Write-Host "      execution—ideal for verifying complex logic changes.`n" -ForegroundColor DarkMagenta
+                    
+    Write-Host "  -overrideDefaults | -ovrd" -ForegroundColor DarkCyan
+    Write-Host "      Mandatory when using automation flags. It allows the script to" -ForegroundColor DarkCyan
+    Write-Host "      write your current session parameters into the JSON config file.`n" -ForegroundColor DarkCyan
+    
+    Write-Host "  -FixNoBackup" -ForegroundColor DarkRed
+    Write-Host "      Disables the '_updated' sibling folder creation. Use with caution," -ForegroundColor DarkRed
+    Write-Host "      as this overwrites metadata directly on the source files.`n" -ForegroundColor DarkRed
+    
+    Write-Host "`n TRACK PRIORITIES & AUTOMATION:`n" -ForegroundColor DarkYellow
+    
+    Write-Host "  -videoLanguage | -vid <string>" -ForegroundColor DarkCyan
+    Write-Host "      Targets the video track language. Note: This requires the -vidf" -ForegroundColor DarkCyan
+    Write-Host "      flag to trigger a physical metadata update.`n" -ForegroundColor DarkCyan
+
+    Write-Host "  -videoForceUpdate | -vidf" -ForegroundColor DarkMagenta
+    Write-Host "      The safety toggle for video metadata. This must be present to" -ForegroundColor DarkMagenta
+    Write-Host "      confirm you want to change the video track language.`n" -ForegroundColor DarkMagenta
+    
+    Write-Host "  -audioLanguagePriority | -aud <string>" -ForegroundColor DarkCyan
+    Write-Host "      Sets the 3-letter ISO code (e.g., 'jpn') for your primary audio." -ForegroundColor DarkCyan
+    Write-Host "      It will automatically set this track as the 'Default' choice.`n" -ForegroundColor DarkCyan
+    
+    Write-Host "  -subtitleLanguagePriority | -sub <string>" -ForegroundColor DarkMagenta
+    Write-Host "      Sets the primary subtitle language. The script uses weighted" -ForegroundColor DarkMagenta
+    Write-Host "      scoring to find the best dialogue track in this language.`n" -ForegroundColor DarkMagenta
+    
+    Write-Host "  -subtitleCodecPriority | -sc <string>" -ForegroundColor DarkCyan
+    Write-Host "      A comma-separated list (e.g., 'ass,srt') that dictates which" -ForegroundColor DarkCyan
+    Write-Host "      subtitle formats to prefer when multiple tracks are available.`n" -ForegroundColor DarkCyan
+    
+    Write-Host "  -Hon | -Honorifics" -ForegroundColor DarkMagenta
+    Write-Host "      Injects a +300 score bonus to tracks labeled with 'honorifics'" -ForegroundColor DarkMagenta
+    Write-Host "      or 'enm', ensuring they are selected over standard dialogue.`n" -ForegroundColor DarkMagenta
+
+    Write-Host "`n GENERAL:`n" -ForegroundColor DarkYellow
+    
+    Write-Host "  -help | -manual" -ForegroundColor DarkCyan
+    Write-Host "      Displays this manual for auditor+fixer.ps1. The one you are" -ForegroundColor DarkCyan
+    Write-Host "      reading right now.`n" -ForegroundColor DarkCyan
+    
+
+    Write-Host "`n NOTES:" -ForegroundColor DarkYellow
+    Write-Host "  * SCORING: Automatically penalizes 'Signs/Songs' tracks." -ForegroundColor DarkGray
+    Write-Host "  * CONFIG: -ovrd is REQUIRED when using automation flags to save to JSON." -ForegroundColor DarkGray
+    Write-Host "  * LOGS: Detailed reports are saved to: $rootLog" -ForegroundColor DarkGray
     
     Write-Host "`n============================================================" -ForegroundColor Cyan
     Write-Host " Press any key to exit..." -ForegroundColor Yellow
@@ -251,7 +322,7 @@ if (Test-Path $configFile) {
 
 # --- STARTUP DISPLAY ---
 Clear-Host
-$version = "2026.05.10_00.30.00"
+$version = "2026.05.10_13.30.00"
 Write-Host "=================================================="
 Write-Host "auditor+fixer.ps1 v$version" -ForegroundColor Cyan
 Write-Host "=================================================="
