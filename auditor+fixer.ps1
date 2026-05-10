@@ -26,6 +26,7 @@
 # ==============================================================================
 # </PROTECTED>
 
+[CmdletBinding()]
 param (
     [Parameter(Mandatory=$false, Position=0, ValueFromRemainingArguments=$true)] 
     [string[]]$PathParts,
@@ -43,10 +44,75 @@ param (
     [Alias("vidf")] [switch]$videoForceUpdate,
     [Alias("aud")] [string]$audioLanguagePriority,
     [Alias("sub")] [string]$subtitleLanguagePriority,
-    [Alias("sc")]  [string]$subtitleCodecPriority
+    [Alias("sc")]  [string]$subtitleCodecPriority,
     
+    [Parameter(Mandatory=$false)]
+    [switch]$Help,
+
+    [Parameter(Mandatory=$false)]
+    [switch]$Manual
     
 )
+
+# --- HELP & MANUAL SYSTEM ---
+if ($Help -or $Manual -or $Args -contains '-?' -or $Args -contains '/?') {
+    Clear-Host
+    Write-Host "============================================================" -ForegroundColor Cyan
+    Write-Host " $title - MANUAL & USAGE GUIDE" -ForegroundColor White
+    Write-Host "============================================================" -ForegroundColor Cyan
+    
+    Write-Host "`n USAGE:" -ForegroundColor Yellow
+    Write-Host "  .\auditor+fixer.ps1 [Flags] -Path 'G:\Media'"
+    
+    Write-Host "`n CORE FLAGS:" -ForegroundColor Yellow
+    Write-Host "  -Path <string>       Target directory for scanning." -ForegroundColor Gray
+    Write-Host "  -Fix                 Execute metadata changes (Mkvpropedit)." -ForegroundColor Gray
+    Write-Host "  -FixDebug            Enable verbose logging for troubleshooting." -ForegroundColor Gray
+    Write-Host "  -ovrd                Load/Create configuration override (JSON)." -ForegroundColor Gray
+    Write-Host "  -FixNoBackup         Run Fix mode without creating track backups." -ForegroundColor Gray
+    
+    Write-Host "`n TRACK PRIORITIES:" -ForegroundColor Yellow
+    Write-Host "  -audioLanguagePriority <string>     Set default audio (e.g., 'jpn')." -ForegroundColor Gray
+    Write-Host "  -subtitleLanguagePriority <string>  Set default subtitles (e.g., 'eng')." -ForegroundColor Gray
+    Write-Host "  -subtitleCodecPriority <string>     Prioritize codecs (e.g., 'S_TEXT/ASS')." -ForegroundColor Gray
+    Write-Host "  -Hon                                Include honorifics bonus in scoring." -ForegroundColor Gray
+
+    Write-Host "`n NOTES:" -ForegroundColor Yellow
+    Write-Host "  * SCORING: Automatically penalizes 'Signs/Songs' tracks."
+    Write-Host "  * CONFIG: Settings persist via JSON when using -ovrd."
+    Write-Host "  * LOGS: Output is directed to the $mainLogDir folder." -ForegroundColor Gray
+    
+    Write-Host "`n============================================================" -ForegroundColor Cyan
+    Write-Host " Press any key to exit..." -ForegroundColor Yellow
+    $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+    exit
+}
+
+# --- UNKNOWN FLAG PROTECTION ---
+# This catches anything starting with '-' that wasn't caught by the Param block
+foreach ($part in $PathParts) {
+    if ($part -like "-*") {
+        Write-Host "`n[ERROR] Unknown flag detected: $part" -ForegroundColor Red
+        Write-Host "Please use -Help to see a list of valid commands.`n" -ForegroundColor Yellow
+        exit
+    }
+}
+
+# 1. Join PathParts if they were passed separately (like via Send To)
+$Path = $PathParts -join " "
+
+# 2. Check if the path is empty or just whitespace
+if ([string]::IsNullOrWhiteSpace($Path)) {
+    Write-Host "`n[ERROR] No target path provided." -ForegroundColor Red
+    Write-Host "Please provide a folder path or use -Help for instructions.`n" -ForegroundColor Yellow
+    exit
+}
+
+# 3. Check if the path actually exists on the system
+if (-not (Test-Path -LiteralPath $Path)) {
+    Write-Host "`n[ERROR] Path not found: $Path" -ForegroundColor Red
+    exit
+}
 
 # --- PLACE THE TRAP HERE INSTEAD ---
 if ($host.Name -eq "ConsoleHost") { $ErrorActionPreference = "Continue" }
