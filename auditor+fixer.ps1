@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: auditor+fixer.ps1
-# VERSION: v2026.05.10_13.30.00
+# VERSION: v2026.05.10_16.55.00
 # TARGET: PowerShell 7.6.1 LTS
 #
 # Copyright (C) 2026 pwsh.Agyjkcrg761
@@ -45,6 +45,12 @@ param (
     [Alias("aud")] [string]$audioLanguagePriority,
     [Alias("sub")] [string]$subtitleLanguagePriority,
     [Alias("sc")]  [string]$subtitleCodecPriority,
+    
+    # New Western Mode Flags
+    [Alias("west", "WesternMode")]
+    [switch]$Western,
+    [Alias("ovrdw")]
+    [Switch]$OverrideWesternDefaults,
     
     #[Parameter(Mandatory=$false)]
     [switch]$Help,
@@ -231,6 +237,47 @@ $fixerLog = Join-Path $fLogDir "auditor+fixer_FIX_QUEUE_$($ts)-log.txt"
 # --- CONFIGURATION DEFAULTS ---
 $configFile = Join-Path $PSScriptRoot "auditor-fixer--FixerDefaults.json"
 
+# --- WESTERN PROFILE HANDLER ---
+$westernFile = Join-Path $PSScriptRoot "auditor-fixer--WesternDefaults.json"
+
+if ($Western) {
+    # If Western mode is on but the file is missing, create it from the Anime template
+    if (-not (Test-Path $westernFile)) {
+        if (Test-Path $configFile) {
+            $base = Get-Content $configFile | ConvertFrom-Json
+            $base.Audio.PreferredLanguage = "eng"
+            $base.Video.TargetLanguage = "eng"
+            $base.Subtitles.PreferredLanguage = "eng"
+            $base | ConvertTo-Json -Depth 10 | Out-File $westernFile -Encoding utf8
+            Write-Host " [!] Created Western Defaults from template." -ForegroundColor Yellow
+        }
+    }
+    # Point the script to the Western file instead of the Anime one
+    if (Test-Path $westernFile) { $configFile = $westernFile }
+}
+
+# Now load whichever file was selected
+if (Test-Path $configFile) {
+    $fixerConfig = Get-Content $configFile | ConvertFrom-Json
+}
+
+# --- SAVE OVERRIDES TO WESTERN JSON ---
+if ($Western -and $OverrideWesternDefaults -and ($null -ne $fixerConfig)) {
+    $needsUpdate = $false
+    if ($PSBoundParameters.ContainsKey('videoLanguage')) { $fixerConfig.Video.TargetLanguage = $videoLanguage; $needsUpdate = $true }
+    if ($PSBoundParameters.ContainsKey('audioLanguagePriority')) { $fixerConfig.Audio.PreferredLanguage = $audioLanguagepriority; $needsUpdate = $true }
+    if ($PSBoundParameters.ContainsKey('subtitleLanguagePriority'))   { $fixerConfig.Subtitles.PreferredLanguage = $subtitleLanguagepriority; $needsUpdate = $true }
+    if ($PSBoundParameters.ContainsKey('subtitleCodecPriority'))     { 
+        $fixerConfig.Subtitles.CodecPriority = @($subtitleCodecPriority) + ($fixerConfig.Subtitles.CodecPriority | Where-Object { $_ -ne $subtitleCodecPriority })
+        $needsUpdate = $true 
+    }
+
+    if ($needsUpdate) {
+        $fixerConfig | ConvertTo-Json -Depth 10 | Out-File $westernFile -Encoding utf8
+        Write-Host " [SAVED] Western defaults have been updated." -ForegroundColor Green
+    }
+}
+
 # Base hardcoded defaults
 $defaultSettings = @{
     Audio = @{ PreferredLanguage = "jpn"; SetDefault = $true; IgnoreCommentary = $true }
@@ -286,19 +333,28 @@ if ($subtitleCodecPriority) {
     $defaultSettings.Subtitles.CodecPriority = @($translated)
 }
 
-# 2.5 VALIDATION: Require -ovrd for parameter usage
+# 2.5 VALIDATION: Require the appropriate override switch for parameter usage
 $usedFlags = @()
 if ($PSBoundParameters.ContainsKey('videoLanguage')) { $usedFlags += "-vid" }
-if ($PSBoundParameters.ContainsKey('audioLanguagePriority')) { $usedFlags += "-aud" }
-if ($PSBoundParameters.ContainsKey('subtitleLanguagePriority')) { $usedFlags += "-sub" }
-if ($PSBoundParameters.ContainsKey('subtitleCodecPriority')) { $usedFlags += "-sc" }
+if ($PSBoundParameters.ContainsKey('audioLanguage')) { $usedFlags += "-aud" }
+if ($PSBoundParameters.ContainsKey('subLanguage'))   { $usedFlags += "-sub" }
+if ($PSBoundParameters.ContainsKey('subCodec'))     { $usedFlags += "-sc" }
 
-if ($usedFlags.Count -gt 0 -and -not $overrideDefaults) {
+# Determine which override switch is required based on the mode
+$isMissingOverride = if ($Western) { 
+    $usedFlags.Count -gt 0 -and -not $OverrideWesternDefaults 
+} else { 
+    $usedFlags.Count -gt 0 -and -not $overrideDefaults 
+}
+
+if ($isMissingOverride) {
+    $requiredSwitch = if ($Western) { "-ovrdw" } else { "-ovrd" }
+    
     Write-Host "==================================================" -ForegroundColor Red
-    Write-Host "ERROR: Parameter Override Detected" -ForegroundColor Red
+    Write-Host "ERROR: Parameter Override Required" -ForegroundColor Red
     Write-Host "The following flags were used: $($usedFlags -join ' ')" -ForegroundColor Yellow
-    Write-Host "To use these, you MUST also include the -ovrd (or -overrideDefaults) switch." -ForegroundColor White
-    Write-Host "This ensures your changes are saved to the config file." -ForegroundColor White
+    Write-Host "To use these, you MUST also include the $requiredSwitch switch." -ForegroundColor White
+    Write-Host "This ensures your changes are saved to the correct config file." -ForegroundColor White
     Write-Host "==================================================" -ForegroundColor Red
     Pause; exit
 }
@@ -322,7 +378,7 @@ if (Test-Path $configFile) {
 
 # --- STARTUP DISPLAY ---
 Clear-Host
-$version = "2026.05.10_13.30.00"
+$version = "2026.05.10_16.55.00"
 Write-Host "=================================================="
 Write-Host "auditor+fixer.ps1 v$version" -ForegroundColor Cyan
 Write-Host "=================================================="
@@ -401,52 +457,61 @@ function Invoke-MkvBackup {
     Copy-Item -LiteralPath $FilePath -Destination (Join-Path $finalDestinationDir $fileName) -Force
 }
 
-function Get-AuditFlags($tracks) {
-    $reasons = ""; $jpnAud = $tracks | Where-Object { $_.type -eq "audio" -and $_.properties.language -eq "jpn" }
+function Get-AuditFlags($tracks, $IsWestern) {
+    $reasons = ""; 
+    $jpnAud = $tracks | Where-Object { $_.type -eq "audio" -and $_.properties.language -eq "jpn" }
+    $engAud = $tracks | Where-Object { $_.type -eq "audio" -and $_.properties.language -eq "eng" }
     $subs = $tracks | Where-Object { $_.type -eq "subtitles" }
     
-    # --- REVISED: AVC HIGH 10 PROFILE CHECK ---
+    # --- AVC HIGH 10 PROFILE CHECK ---
     $vTrack = $tracks | Where-Object { $_.type -eq "video" } | Select-Object -First 1
     if ($null -ne $vTrack) {
-        # Check both common property names for the hex string
-        $privData = $vTrack.properties.codec_private
-        if ($null -eq $privData) { $privData = $vTrack.properties.codec_private_data }
-
+        $privData = if ($null -ne $vTrack.properties.codec_private) { $vTrack.properties.codec_private } else { $vTrack.properties.codec_private_data }
         if ($null -ne $privData -and $privData.Length -ge 4) {
-            # In '016e...', '6e' starts at index 2 (the 3rd and 4th characters)
-            if ($privData.Substring(2, 2) -eq "6e") {
-                $reasons += "🔟[AVC High 10 Profile] "
-            }
+            if ($privData.Substring(2, 2) -eq "6e") { $reasons += "🔟[AVC High 10 Profile] " }
         }
     }
-    # ------------------------------------------
-    
+
+    # --- SHARED CHECKS ---
     if ($tracks | Where-Object { $_.properties.forced_track }) { $reasons += "🚨[Forced Track] " }
+    if ($tracks | Where-Object { ($_.type -match "audio|subtitles") -and $_.properties.language -eq "und" }) { $reasons += "❔[Und Lang] " }
 
     $trackTypes = $tracks | Select-Object -ExpandProperty type -Unique
     foreach ($type in $trackTypes) {
         $defaults = $tracks | Where-Object { $_.type -eq $type -and $_.properties.default_track }
-        if ($defaults.Count -gt 1) { 
-            $reasons += "⚔️[Conflict: Multiple $($type.ToUpper()) Defaults] " 
-        }
+        if ($defaults.Count -gt 1) { $reasons += "⚔️[Conflict: Multiple $($type.ToUpper()) Defaults] " }
     }
 
-    if ($tracks | Where-Object { ($_.type -match "audio|subtitles") -and $_.properties.language -eq "und" }) { $reasons += "❔[Und Lang] " }
-    if ($jpnAud -and -not ($jpnAud | Where-Object { $_.properties.default_track })) { $reasons += "🎙[JPN Audio Not Default] " }
-    if ($jpnAud -and $subs.Count -eq 0) { $reasons += "⚠️[JPN Audio/No Subs] " }
-    
-    if ($subs.Count -gt 0) {
-        $dSubs = $subs | Where-Object { $_.properties.default_track }
-        if ($dSubs | Where-Object { $_.properties.track_name -match "Signs|Songs|Lyrics|Forced" -and $_.properties.track_name -notmatch "Dialogue" }) { $reasons += "🎵[Sub: Signs/Songs Default] " }
-        if ($jpnAud -and -not ($subs | Where-Object { $_.properties.language -eq "eng" -and $_.properties.default_track })) { $reasons += "🔇[No ENG Sub Default] " }
+    # --- MODE SPECIFIC LOGIC ---
+    if ($IsWestern) {
+        # WESTERN MODE FLAGS
+        # Improved ENG Audio Check
+        # Flags if English audio is missing OR if it exists but isn't default
+        if (-not ($engAud | Where-Object { $_.properties.default_track })) { 
+            $reasons += "🎙️[ENG Audio Not Default] " 
+        }
         
-        # --- PRIORITY ORDERED HI/CC CHECKS ---
-        if ($subs | Where-Object { $_.properties.language -eq "eng" -and $_.properties.flag_hearing_impaired }) { $reasons += "👂[ENG Sub HI/CC] " }
-        if ($subs | Where-Object { $_.properties.track_name -match "SDH" }) { $reasons += "🙉[SDH Name] " }
-        if ($subs | Where-Object { $_.properties.flag_hearing_impaired }) { $reasons += "👀[Sub HI/CC] " }
+        # Subtitle Check (Flags if a non-forced sub is set to default)
+        if ($subs | Where-Object { $_.properties.default_track -and $_.properties.track_name -notmatch "Forced" }) { 
+            $reasons += "💬[Sub: Full Sub is Default] " 
+        }
+    } else {
+        # ANIME MODE FLAGS (Includes your specific HI/CC and Signs/Songs logic)
+        if ($jpnAud -and -not ($jpnAud | Where-Object { $_.properties.default_track })) { $reasons += "🎙[JPN Audio Not Default] " }
+        if ($jpnAud -and $subs.Count -eq 0) { $reasons += "⚠️[JPN Audio/No Subs] " }
+        
+        if ($subs.Count -gt 0) {
+            $dSubs = $subs | Where-Object { $_.properties.default_track }
+            if ($dSubs | Where-Object { $_.properties.track_name -match "Signs|Songs|Lyrics|Forced" -and $_.properties.track_name -notmatch "Dialogue" }) { $reasons += "🎵[Sub: Signs/Songs Default] " }
+            if ($jpnAud -and -not ($subs | Where-Object { $_.properties.language -eq "eng" -and $_.properties.default_track })) { $reasons += "🔇[No ENG Sub Default] " }
+            
+            # HI/CC Checks
+            if ($subs | Where-Object { $_.properties.language -eq "eng" -and $_.properties.flag_hearing_impaired }) { $reasons += "👂[ENG Sub HI/CC] " }
+            if ($subs | Where-Object { $_.properties.track_name -match "SDH" }) { $reasons += "🙉[SDH Name] " }
+            if ($subs | Where-Object { $_.properties.flag_hearing_impaired }) { $reasons += "👀[Sub HI/CC] " }
+        }
+        if ($subs | Where-Object { $_.properties.language -eq "jpn" }) { $reasons += "⛩️[JPN Sub Present] " }
     }
-    
-    if ($subs | Where-Object { $_.properties.language -eq "jpn" }) { $reasons += "⛩️[JPN Sub Present] " }
     
     return $reasons.Trim()
 }
@@ -601,7 +666,7 @@ foreach ($folderPath in $targetFolders) {
         $stableIndex = $global:GroupMap[$sig]
         $isPrimary = ($g -eq 0)
         $repFile = $currentGroup.Files[0]
-        $reasons = Get-AuditFlags $currentGroup.Json.tracks
+        $reasons = Get-AuditFlags -tracks $currentGroup.Json.tracks -IsWestern $Western
         
         $entry = New-Object System.Collections.Generic.List[string]
         if ($g -gt 0) { $entry.Add("") }
@@ -707,7 +772,7 @@ foreach ($folderPath in $targetFolders) {
                 # --- VIDEO LOGIC ---
                 if ($t.type -eq "video") {
                     # 1. Resolve the target language from your -vid chi command
-                    $targetLangInput = if ($videoLanguage) { $videoLanguage } else { $fixerConfig.Video.TargetLanguage }
+                    $targetLangInput = if ($videoLanguage) { $videoLanguage } elseif ($Western) { "eng" } else { $fixerConfig.Video.TargetLanguage }
                     $target = if ($langMap.ContainsKey($targetLangInput.ToLower())) { $langMap[$targetLangInput.ToLower()] } else { $targetLangInput }
 
                     # 2. Check if the file is ACTUALLY different from your goal
@@ -729,7 +794,9 @@ foreach ($folderPath in $targetFolders) {
                 }
 
                 # --- AUDIO/SUB TARGETING ---
-                if ($t.type -eq "audio" -and -not $foundPrefAudio -and $t.properties.language -eq $fixerConfig.Audio.PreferredLanguage) {
+                $targetAudLang = if ($Western) { "eng" } else { $fixerConfig.Audio.PreferredLanguage }
+                
+                if ($t.type -eq "audio" -and -not $foundPrefAudio -and $t.properties.language -eq $targetAudLang) {
                     if (-not ($fixerConfig.Audio.IgnoreCommentary -and ($t.properties.track_name -match "Commentary|Interview"))) {
                         $bestAudioSel = $sel; $foundPrefAudio = $true
                     }
@@ -795,6 +862,18 @@ foreach ($folderPath in $targetFolders) {
             
             # --- CHOOSE BEST SUBTITLE & RESET OTHER SUB FLAGS ---
             if ($subCandidates.Count -gt 0) {
+                    # If Western mode is on AND you haven't specified a language preference in the JSON
+                if ($Western -and [string]::IsNullOrWhiteSpace($fixerConfig.Subtitles.PreferredLanguage)) {
+                    foreach ($sub in $subCandidates) {
+                        if ($sub.WasDefault -or ($currentGroup.Json.tracks | Where-Object { $_.id -eq $sub.ID }).properties.forced_track) {
+                            $loseID = $sub.ID + 1
+                            $Params += @('--edit', "track:$loseID", '--set', "flag-default=0", '--set', "flag-forced=0")
+                            $needsChange = $true
+                            [void]$fixDetails.Add("  ACTION: STRIP_FLAGS | TRACK: $loseID | REASON: Western Mode (No Subs Requested)")
+                        }
+                    }
+                } else {
+                    # ANIME MODE: Existing Scoring Logic
                 $winner = $subCandidates | Sort-Object Score -Descending | Select-Object -First 1
                 $targetSubLang = "eng" 
                 $subReason = if ($Hon -and ($winner.Score -ge 100)) { "Preferred Honorifics ($($winner.Lang))" } else { "Primary ENG Sub" }
@@ -855,8 +934,9 @@ foreach ($folderPath in $targetFolders) {
                             }
                         }
                     } # Closes foreach
-                } # Closes Mechanical Trigger (if $winnerNeedsFix -or $losersNeedStrip)
-            } # Closes Subtitle Logic Block
+                } # Closes Mechanical Trigger
+            } # Closes ELSE (Anime Mode)
+        } # Closes Subtitle Logic Block (if $subCandidates.Count -gt 0) # Closes Subtitle Logic Block
 
 
             # 3. EXECUTION
