@@ -221,14 +221,14 @@ function Get-Selector {
     return "$letter$val"
 }
 
-function Get-Selector {
-    param($type, [switch]$Reset)
-    if ($Reset) { $global:trackCounters = @{ "video" = 1; "audio" = 1; "subtitles" = 1 }; return "" }
-    $val = $global:trackCounters[$type]
-    $letter = switch ($type) { "video" { "v" } "audio" { "a" } "subtitles" { "s" } }
-    $global:trackCounters[$type]++
-    return "$letter$val"
-}
+# function Get-Selector {
+    # param($type, [switch]$Reset)
+    # if ($Reset) { $global:trackCounters = @{ "video" = 1; "audio" = 1; "subtitles" = 1 }; return "" }
+    # $val = $global:trackCounters[$type]
+    # $letter = switch ($type) { "video" { "v" } "audio" { "a" } "subtitles" { "s" } }
+    # $global:trackCounters[$type]++
+    # return "$letter$val"
+# }
 
 function Invoke-MkvBackup {
     param([string]$FilePath, [string]$RootPath)
@@ -265,7 +265,23 @@ function Invoke-MkvBackup {
 function Get-AuditFlags($tracks) {
     $reasons = ""; $jpnAud = $tracks | Where-Object { $_.type -eq "audio" -and $_.properties.language -eq "jpn" }
     $subs = $tracks | Where-Object { $_.type -eq "subtitles" }
+    
+    # --- REVISED: AVC HIGH 10 PROFILE CHECK ---
+    $vTrack = $tracks | Where-Object { $_.type -eq "video" } | Select-Object -First 1
+    if ($null -ne $vTrack) {
+        # Check both common property names for the hex string
+        $privData = $vTrack.properties.codec_private
+        if ($null -eq $privData) { $privData = $vTrack.properties.codec_private_data }
 
+        if ($null -ne $privData -and $privData.Length -ge 4) {
+            # In '016e...', '6e' starts at index 2 (the 3rd and 4th characters)
+            if ($privData.Substring(2, 2) -eq "6e") {
+                $reasons += "🔟[AVC High 10 Profile] "
+            }
+        }
+    }
+    # ------------------------------------------
+    
     if ($tracks | Where-Object { $_.properties.forced_track }) { $reasons += "🚨[Forced Track] " }
 
     $trackTypes = $tracks | Select-Object -ExpandProperty type -Unique
