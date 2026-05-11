@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: auditor+fixer.ps1
-# VERSION: v2026.05.10_16.55.00
+# VERSION: v2026.05.11_17.15.00
 # TARGET: PowerShell 7.6.1 LTS
 #
 # Copyright (C) 2026 pwsh.Agyjkcrg761
@@ -51,6 +51,13 @@ param (
     [switch]$Western,
     [Alias("ovrdw")]
     [Switch]$OverrideWesternDefaults,
+    
+    # Western Mode Hearing Impaired Subs
+    [switch]$sdh,
+    [switch]$hi,
+    [switch]$hicc,
+    [switch]$cc,
+    [switch]$SubtitlesHearingImpaired,
     
     #[Parameter(Mandatory=$false)]
     [switch]$Help,
@@ -112,14 +119,14 @@ if ($Help -or $Manual) {
     Write-Host "  -FixDebug" -ForegroundColor DarkMagenta
     Write-Host "      Prints the exact Mkvpropedit command strings to the console before" -ForegroundColor DarkMagenta
     Write-Host "      execution—ideal for verifying complex logic changes.`n" -ForegroundColor DarkMagenta
-                    
-    Write-Host "  -overrideDefaults | -ovrd" -ForegroundColor DarkCyan
-    Write-Host "      Mandatory when using automation flags. It allows the script to" -ForegroundColor DarkCyan
-    Write-Host "      write your current session parameters into the JSON config file.`n" -ForegroundColor DarkCyan
     
     Write-Host "  -FixNoBackup" -ForegroundColor DarkRed
     Write-Host "      Disables the '_updated' sibling folder creation. Use with caution," -ForegroundColor DarkRed
     Write-Host "      as this overwrites metadata directly on the source files.`n" -ForegroundColor DarkRed
+    
+    Write-Host "  -overrideDefaults | -ovrd" -ForegroundColor DarkCyan
+    Write-Host "      Mandatory when using automation flags. It allows the script to" -ForegroundColor DarkCyan
+    Write-Host "      write your current session parameters into the JSON config file.`n" -ForegroundColor DarkCyan
     
     Write-Host "`n TRACK PRIORITIES & AUTOMATION:`n" -ForegroundColor DarkYellow
     
@@ -173,6 +180,13 @@ foreach ($part in $PathParts) {
         Write-Host "Please use -Help to see a list of valid commands.`n" -ForegroundColor Yellow
         exit
     }
+}
+
+# --- DEPENDENCY CHECK ---
+if (($FixNoBackup -or $FixDebug) -and -not $Fix) {
+    Write-Host "`n[ERROR] Modifier flag detected without -Fix." -ForegroundColor Red
+    Write-Host "The -FixNoBackup and -FixDebug flags require the -Fix switch to be active.`n" -ForegroundColor Yellow
+    exit
 }
 
 # 1. Join PathParts if they were passed separately (like via Send To)
@@ -247,7 +261,7 @@ if ($Western) {
             $base = Get-Content $configFile | ConvertFrom-Json
             $base.Audio.PreferredLanguage = "eng"
             $base.Video.TargetLanguage = "eng"
-            $base.Subtitles.PreferredLanguage = "eng"
+            $base.Subtitles.PreferredLanguage = ""
             $base | ConvertTo-Json -Depth 10 | Out-File $westernFile -Encoding utf8
             Write-Host " [!] Created Western Defaults from template." -ForegroundColor Yellow
         }
@@ -378,31 +392,45 @@ if (Test-Path $configFile) {
 
 # --- STARTUP DISPLAY ---
 Clear-Host
-$version = "2026.05.10_16.55.00"
+$version = "2026.05.11_17.15.00"
+
+# Determine Display Mode, Action, and Override Status
+$modeBase = if ($Western) { "Western Mode" } else { "Anime Mode (default)" }
+$action = if ($Fix) { "Audit & Fix" } else { "Audit" }
+$nobackupStatus = if ($FixNoBackup) { " NO BACKUP!" } else { "" }
+$debugStatus = if ($FixDebug) { " Debug" } else { "" }
+$ovrdStatus = if ($overrideDefaults -or $OverrideWesternDefaults) { " override defaults" } else { "" }
+$displayMode = "$modeBase $action$nobackupStatus$debugStatus$ovrdStatus"
+
 Write-Host "=================================================="
 Write-Host "auditor+fixer.ps1 v$version" -ForegroundColor Cyan
 Write-Host "=================================================="
-Write-Host "Config Status: " -NoNewline; Write-Host $configSource -ForegroundColor Yellow
+Write-Host $displayMode -ForegroundColor Blue
+if ($FixNoBackup) {
+    Write-Host " [!] WARNING: Backups are DISABLED. This will overwrite your original files!" -ForegroundColor DarkYellow
+}
+Write-Host "--------------------------------------------------"
+Write-Host "Config Status: " -NoNewline; Write-Host $configSource -ForegroundColor DarkMagenta
 Write-Host "Config Path:   " -NoNewline; Write-Host $configFile -ForegroundColor DarkGray
 Write-Host "--------------------------------------------------"
-Write-Host "LOADED OPTIONS:" -ForegroundColor White
-Write-Host "  Video Target: " -NoNewline; Write-Host "$($fixerConfig.Video.TargetLanguage)" -ForegroundColor Magenta
-Write-Host "  Audio Target: " -NoNewline; Write-Host "$($fixerConfig.Audio.PreferredLanguage)" -ForegroundColor Magenta
-Write-Host "  Sub Target:   " -NoNewline; Write-Host "$($fixerConfig.Subtitles.PreferredLanguage)" -ForegroundColor Magenta
-Write-Host "  Sub Codecs:   " -NoNewline; Write-Host "$($fixerConfig.Subtitles.CodecPriority -join ', ')" -ForegroundColor Magenta
+Write-Host "LOADED OPTIONS:" -ForegroundColor DarkGreen
+Write-Host "  Video Target: " -NoNewline; Write-Host "$($fixerConfig.Video.TargetLanguage)" -ForegroundColor Blue
+Write-Host "  Audio Target: " -NoNewline; Write-Host "$($fixerConfig.Audio.PreferredLanguage)" -ForegroundColor DarkMagenta
+Write-Host "  Sub Target:   " -NoNewline; Write-Host "$($fixerConfig.Subtitles.PreferredLanguage)" -ForegroundColor Blue
+Write-Host "  Sub Codecs:   " -NoNewline; Write-Host "$($fixerConfig.Subtitles.CodecPriority -join ', ')" -ForegroundColor DarkMagenta
 Write-Host "--------------------------------------------------"
 #Write-Host "Script Location: " -NoNewline; Write-Host "$PSScriptRoot" -ForegroundColor Yellow
 #Write-Host "--------------------------------------------------"
-Write-Host "Target Folder(s):" -ForegroundColor White
-foreach ($p in $inputPaths) { Write-Host "  -> $p" -ForegroundColor Magent }
+Write-Host "Target Folder(s):" -ForegroundColor Green
+foreach ($p in $inputPaths) { Write-Host "  -> $p" -ForegroundColor Blue }
 Write-Host "--------------------------------------------------"
 
 $choice = Read-Host "Begin processing? (Y/N)"
 if ($choice -notmatch "^[yY]$") {
-    Write-Host "Operation cancelled by user." -ForegroundColor Yellow
+    Write-Host "Operation cancelled by user." -ForegroundColor DarkYellow
     Pause; exit
 }
-Write-Host "Starting..." -ForegroundColor Green
+Write-Host "Starting..." -ForegroundColor DarkGreen
 # --- END STARTUP DISPLAY ---
 
 # 2. Functions
@@ -491,9 +519,29 @@ function Get-AuditFlags($tracks, $IsWestern) {
             $reasons += "🎙️[ENG Audio Not Default] " 
         }
         
-        # Subtitle Check (Flags if a non-forced sub is set to default)
-        if ($subs | Where-Object { $_.properties.default_track -and $_.properties.track_name -notmatch "Forced" }) { 
-            $reasons += "💬[Sub: Full Sub is Default] " 
+        # --- SUBTITLE LOGIC: PREFERENCE & FALLBACK ---
+        $defaultSub = $subs | Where-Object { $_.properties.default_track }
+        $hasEngSDH = $subs | Where-Object { 
+            ($_.properties.language -eq "eng") -and 
+            ($_.properties.track_name -match "SDH|HI|CC" -or $_.properties.flag_hearing_impaired) 
+        }
+
+        # 1. Critical Audit: Is ANY English Subtitle set to default? (Ignoring Forced)
+        if (-not ($defaultSub | Where-Object { $_.properties.language -eq "eng" -and $_.properties.track_name -notmatch "Forced" })) {
+            $reasons += "🔇[Sub: None Default] "
+        }
+
+        # 2. Preference Audit: If SDH flags are used, check if we can "upgrade" to SDH
+        if ($sdh -or $hi -or $hicc -or $cc -or $SubtitlesHearingImpaired) {
+            if ($hasEngSDH) {
+                $isSDHDefault = $hasEngSDH | Where-Object { $_.properties.default_track }
+                if (-not $isSDHDefault) {
+                    $reasons += "✨[SDH Available] "
+                }
+            } else {
+                # Only flag missing if specifically asked to audit for SDH
+                $reasons += "🚫[Missing ENG SDH/CC] "
+            }
         }
     } else {
         # ANIME MODE FLAGS (Includes your specific HI/CC and Signs/Songs logic)
@@ -771,24 +819,29 @@ foreach ($folderPath in $targetFolders) {
                 
                 # --- VIDEO LOGIC ---
                 if ($t.type -eq "video") {
-                    # 1. Resolve the target language from your -vid chi command
-                    $targetLangInput = if ($videoLanguage) { $videoLanguage } elseif ($Western) { "eng" } else { $fixerConfig.Video.TargetLanguage }
+                    # 1. Resolve the target language from the -vid command or the JSON config
+                    $targetLangInput = if ($videoLanguage) { $videoLanguage } else { $fixerConfig.Video.TargetLanguage }
                     $target = if ($langMap.ContainsKey($targetLangInput.ToLower())) { $langMap[$targetLangInput.ToLower()] } else { $targetLangInput }
 
-                    # 2. Check if the file is ACTUALLY different from your goal
+                    # 2. Check if the file track actually needs a change (language or default flag)
                     $isIncorrect = ($t.properties.language -ne $target) -or ($t.properties.default_track -ne $true)
-                    
-                    if ($isIncorrect) {
-                        # 3. Add the mkvpropedit command
-                        $mkvID = $t.id + 1
-                        $Params += @('--edit', "track:$mkvID", '--set', "language=$target", '--set', "flag-default=1")
-                        
-                        # 4. LOGGING: Horizontal pipe-separated format
-                        $logReason = if ($videoForceUpdate) { "Video Force (-vidf)" } else { "Passive Update (-vid)" }
-                        [void]$fixDetails.Add("  ACTION: SET_LANG=$target | SET_DEFAULT=1 | TRACK: $sel | REASON: $logReason")
 
-                        # 5. Only trigger the actual file write if -vidf was used
-                        if ($videoForceUpdate) { $needsChange = $true }
+                    if ($isIncorrect) {
+                        # 3. Skip if Western mode is active and the target is blank (Hands-off mode)
+                        $skipVideo = $Western -and [string]::IsNullOrWhiteSpace($target)
+
+                        if (-not $skipVideo) {
+                            # 4. Add the mkvpropedit command
+                            $mkvID = $t.id + 1
+                            $Params += @('--edit', "track:$mkvID", '--set', "language=$target", '--set', "flag-default=1")
+
+                            # 5. LOGGING: Identify if this was a forced update or a passive match
+                            $logReason = if ($videoForceUpdate) { "Video Force (-vidf)" } else { "Passive Update (-vid)" }
+                            [void]$fixDetails.Add("  ACTION: SET_LANG=$target | SET_DEFAULT=1 | TRACK: $mkvID | REASON: $logReason")
+
+                            # 6. Only trigger the actual file write if -vidf was used
+                            if ($videoForceUpdate) { $needsChange = $true }
+                        }
                     }
                     continue 
                 }
