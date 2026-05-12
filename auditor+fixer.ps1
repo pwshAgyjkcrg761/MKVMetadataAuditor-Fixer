@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: auditor+fixer.ps1
-# VERSION: v2026.05.12_11.31.00
+# VERSION: v2026.05.12_12.55.00
 # TARGET: PowerShell 7.6.1 LTS
 #
 # Copyright (C) 2026 pwsh.Agyjkcrg761
@@ -186,6 +186,16 @@ foreach ($part in $PathParts) {
 if (($FixNoBackup -or $FixDebug) -and -not $Fix) {
     Write-Host "`n[ERROR] Modifier flag detected without -Fix." -ForegroundColor Red
     Write-Host "The -FixNoBackup and -FixDebug flags require the -Fix switch to be active.`n" -ForegroundColor Yellow
+    exit
+}
+
+# --- FLAG VALIDATION ---
+$sdhActive = ($sdh -or $hi -or $hicc -or $cc -or $SubtitlesHearingImpaired)
+if ($sdhActive -and -not $Western) {
+    Write-Host ""
+    Write-Host " [!] ERROR: SDH/HI/CC flags are only supported in -Western mode." -ForegroundColor Red
+    Write-Host " Please add -Western to your command or remove the SDH flags." -ForegroundColor Yellow
+    Write-Host ""
     exit
 }
 
@@ -392,15 +402,16 @@ if (Test-Path $configFile) {
 
 # --- STARTUP DISPLAY ---
 Clear-Host
-$version = "2026.05.12_11.31.00"
+$version = "2026.05.12_12.55.00"
 
 # Determine Display Mode, Action, and Override Status
 $modeBase = if ($Western) { "Western Mode" } else { "Anime Mode (default)" }
+$sdhStatus = if ($sdh -or $hi -or $hicc -or $cc -or $SubtitlesHearingImpaired) { " SDH" } else { "" }
 $action = if ($Fix) { "Audit & Fix" } else { "Audit" }
 $nobackupStatus = if ($FixNoBackup) { " NO BACKUP!" } else { "" }
 $debugStatus = if ($FixDebug) { " Debug" } else { "" }
 $ovrdStatus = if ($overrideDefaults -or $OverrideWesternDefaults) { " override defaults" } else { "" }
-$displayMode = "$modeBase $action$nobackupStatus$debugStatus$ovrdStatus"
+$displayMode = "$modeBase $action$nobackupStatus$debugStatus$ovrdStatus$sdhStatus"
 
 Write-Host "=================================================="
 Write-Host "auditor+fixer.ps1 v$version" -ForegroundColor Cyan
@@ -421,8 +432,27 @@ Write-Host "  Sub Codecs:   " -NoNewline; Write-Host "$($fixerConfig.Subtitles.C
 Write-Host "--------------------------------------------------"
 #Write-Host "Script Location: " -NoNewline; Write-Host "$PSScriptRoot" -ForegroundColor Yellow
 #Write-Host "--------------------------------------------------"
-Write-Host "Target Folder(s):" -ForegroundColor Green
+Write-Host "Source Folder(s):" -ForegroundColor Green
 foreach ($p in $inputPaths) { Write-Host "  -> $p" -ForegroundColor Blue }
+
+if ($Fix) {
+    Write-Host "Destination Folder(s):" -ForegroundColor Green
+    if ($FixNoBackup) {
+        # Flash loop: alternates between Red and Yellow 6 times
+        for ($i = 0; $i -lt 6; $i++) {
+            $flashColor = if ($i % 2 -eq 0) { "DarkRed" } else { "DarkYellow" }
+            Write-Host -NoNewline "`r  -> SOURCE WILL BE OVERWRITTEN" -ForegroundColor $flashColor
+            Start-Sleep -Milliseconds 250
+        }
+        # Finalize on solid Red to ensure the warning remains visible
+        Write-Host "`r  -> SOURCE WILL BE OVERWRITTEN" -ForegroundColor DarkRed
+    } else {
+        foreach ($p in $inputPaths) { 
+            $destPath = $p.TrimEnd('\') + "_updated"
+            Write-Host "  -> $destPath" -ForegroundColor Blue 
+        }
+    }
+}
 Write-Host "--------------------------------------------------"
 
 $choice = Read-Host "Begin processing? (Y/N)"
