@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: auditor+fixer.ps1
-# VERSION: v2026.05.11_17.15.00
+# VERSION: v2026.05.12_11.31.00
 # TARGET: PowerShell 7.6.1 LTS
 #
 # Copyright (C) 2026 pwsh.Agyjkcrg761
@@ -392,7 +392,7 @@ if (Test-Path $configFile) {
 
 # --- STARTUP DISPLAY ---
 Clear-Host
-$version = "2026.05.11_17.15.00"
+$version = "2026.05.12_11.31.00"
 
 # Determine Display Mode, Action, and Override Status
 $modeBase = if ($Western) { "Western Mode" } else { "Anime Mode (default)" }
@@ -879,6 +879,22 @@ foreach ($folderPath in $targetFolders) {
                     
                     if ($Hon -and (($trackName -match "honorifics|honors") -or ($trackLang -eq "enm"))) { $score += 300 }
                     if ($trackLang -eq $fixerConfig.Subtitles.PreferredLanguage) { $score += 1 }
+                    
+                    # --- SDH/HI/CC Promotion Scoring ---
+                    if ($sdh -or $hi -or $hicc -or $cc -or $SubtitlesHearingImpaired) {
+                        $isSDH = ($trackName -match "SDH|HI|CC" -or $t.properties.flag_hearing_impaired)
+                        if ($trackLang -eq "eng" -and $isSDH) {
+                            $score += 500  # Massive boost to ensure SDH is selected as the top candidate
+                        }
+                    }
+                    
+                    # --- Western "Full Sub" Tie-Breaker ---
+                    if ($Western -and -not $sdhWinner) {
+                        # If it's English, not forced, and doesn't match signs/songs, it's likely the full sub
+                        if ($trackLang -eq "eng" -and -not $t.properties.forced_track -and $trackName -notmatch "Signs|Songs|Lyrics") {
+                            $score += 200 
+                        }
+                    }
 
                     # 4. ADD TO LIST (No filter here - we need to see the "bad" tracks to fix them)
                     $subCandidates += [PSCustomObject]@{
@@ -917,12 +933,45 @@ foreach ($folderPath in $targetFolders) {
             if ($subCandidates.Count -gt 0) {
                     # If Western mode is on AND you haven't specified a language preference in the JSON
                 if ($Western -and [string]::IsNullOrWhiteSpace($fixerConfig.Subtitles.PreferredLanguage)) {
-                    foreach ($sub in $subCandidates) {
-                        if ($sub.WasDefault -or ($currentGroup.Json.tracks | Where-Object { $_.id -eq $sub.ID }).properties.forced_track) {
-                            $loseID = $sub.ID + 1
-                            $Params += @('--edit', "track:$loseID", '--set', "flag-default=0", '--set', "flag-forced=0")
+                    $sdhRequested = ($sdh -or $hi -or $hicc -or $cc -or $SubtitlesHearingImpaired)
+                    $sdhWinner = $subCandidates | Sort-Object Score -Descending | Select-Object -First 1
+
+                    # Only promote if SDH was requested AND the winner actually is an SDH track
+                    $isActualSDH = ($sdhWinner.Name -match "SDH|HI|CC" -or ($currentGroup.Json.tracks | Where-Object { $_.id -eq $sdhWinner.ID }).properties.flag_hearing_impaired)
+
+                    if ($sdhRequested -and $isActualSDH) {
+                        $winID = $sdhWinner.ID + 1
+                        $isAlreadyHI = ($currentGroup.Json.tracks | Where-Object { $_.id -eq $sdhWinner.ID }).properties.flag_hearing_impaired
+                        
+                        if (-not $sdhWinner.WasDefault -or -not $isAlreadyHI) {
+                            $Params += @('--edit', "track:$winID", '--set', "flag-default=1", '--set', "flag-forced=0", '--set', "flag-hearing-impaired=1")
                             $needsChange = $true
-                            [void]$fixDetails.Add("  ACTION: STRIP_FLAGS | TRACK: $loseID | REASON: Western Mode (No Subs Requested)")
+                            [void]$fixDetails.Add("  ACTION: SET_DEFAULT=1 + HI_FLAG | TRACK: $winID | REASON: Western SDH Promotion")
+                        }
+
+                        foreach ($sub in $subCandidates) {
+                            if ($sub.ID -ne $sdhWinner.ID) {
+                                $lostTrack = $currentGroup.Json.tracks | Where-Object { $_.id -eq $sub.ID }
+                                # Strip default, forced, AND hearing impaired flags from non-winners
+                                if ($lostTrack.properties.default_track -or $lostTrack.properties.forced_track -or $lostTrack.properties.flag_hearing_impaired) {
+                                    $loseID = $sub.ID + 1
+                                    $Params += @('--edit', "track:$loseID", '--set', "flag-default=0", '--set', "flag-forced=0", '--set', "flag-hearing-impaired=0")
+                                    $needsChange = $true
+                                    [void]$fixDetails.Add("  ACTION: STRIP_FLAGS | TRACK: $loseID | REASON: Western SDH Conflict")
+                                }
+                            }
+                        }
+                    } else {
+                        # Default Western behavior: Strip all subtitle flags
+                        foreach ($sub in $subCandidates) {
+                            $thisTrack = $currentGroup.Json.tracks | Where-Object { $_.id -eq $sub.ID }
+                            # Modified to also strip the hearing impaired flag during generic cleanup
+                            if ($thisTrack.properties.default_track -or $thisTrack.properties.forced_track -or $thisTrack.properties.flag_hearing_impaired) {
+                                $loseID = $sub.ID + 1
+                                $Params += @('--edit', "track:$loseID", '--set', "flag-default=0", '--set', "flag-forced=0", '--set', "flag-hearing-impaired=0")
+                                $needsChange = $true
+                                [void]$fixDetails.Add("  ACTION: STRIP_FLAGS | TRACK: $loseID | REASON: Western Mode (Clean)")
+                            }
                         }
                     }
                 } else {
