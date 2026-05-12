@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: auditor+fixer.ps1
-# VERSION: v2026.05.12_12.55.00
+# VERSION: v2026.05.12_13.41.00
 # TARGET: PowerShell 7.6.1 LTS
 #
 # Copyright (C) 2026 pwsh.Agyjkcrg761
@@ -402,7 +402,7 @@ if (Test-Path $configFile) {
 
 # --- STARTUP DISPLAY ---
 Clear-Host
-$version = "2026.05.12_12.55.00"
+$version = "2026.05.12_12.41.00"
 
 # Determine Display Mode, Action, and Override Status
 $modeBase = if ($Western) { "Western Mode" } else { "Anime Mode (default)" }
@@ -532,6 +532,10 @@ function Get-AuditFlags($tracks, $IsWestern) {
 
     # --- SHARED CHECKS ---
     if ($tracks | Where-Object { $_.properties.forced_track }) { $reasons += "🚨[Forced Track] " }
+    
+    $videoTracks = $tracks | Where-Object { $_.type -eq "video" }
+    if (($videoTracks | Measure-Object).Count -gt 1) { $reasons += "🎞️[Multiple Video Tracks] " }
+    
     if ($tracks | Where-Object { ($_.type -match "audio|subtitles") -and $_.properties.language -eq "und" }) { $reasons += "❔[Und Lang] " }
 
     $trackTypes = $tracks | Select-Object -ExpandProperty type -Unique
