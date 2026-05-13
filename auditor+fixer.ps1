@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: auditor+fixer.ps1
-# VERSION: v2026.05.12_13.41.00
+# VERSION: v2026.05.12_20.01.00
 # TARGET: PowerShell 7.6.1 LTS
 #
 # Copyright (C) 2026 pwsh.Agyjkcrg761
@@ -34,6 +34,8 @@ param (
     [switch]$Fix,        # Activates the Fixer module
     [switch]$FixDebug,
     [switch]$FixNoBackup,    # Disables the automatic 1-by-1 backup
+    [switch]$disableRecurse, # New flag to disable sub-directory scanning
+    [switch]$DelLog,         # New flag to clear the logs folder
     [Alias("Honorifics")]
     [switch]$Hon,          # New switch for Honorifics mode
     [Alias("ovrd")]
@@ -199,31 +201,31 @@ if ($sdhActive -and -not $Western) {
     exit
 }
 
-# 1. Join PathParts if they were passed separately (like via Send To)
-$Path = $PathParts -join " "
-
-# 2. Check if the path is empty or just whitespace
-if ([string]::IsNullOrWhiteSpace($Path)) {
-    Write-Host "`n[ERROR] No target path provided." -ForegroundColor Red
-    Write-Host "Please provide a folder path or use -Help for instructions.`n" -ForegroundColor Yellow
-    exit
-}
-
-# 3. Check if the path actually exists on the system
-if (-not (Test-Path -LiteralPath $Path)) {
-    Write-Host "`n[ERROR] Path not found: $Path" -ForegroundColor Red
-    exit
-}
-
 # --- PLACE THE TRAP HERE INSTEAD ---
 if ($host.Name -eq "ConsoleHost") { $ErrorActionPreference = "Continue" }
 # -----------------------------------
 
 $ProgressPreference = 'SilentlyContinue' # Speeds up network directory scanning
 
-# Constants & Tool Paths
-$mkvpropedit = "C:\Program Files\MKVToolNix\mkvpropedit.exe"
-$mkvmerge    = "C:\Program Files\MKVToolNix\mkvmerge.exe"
+# --- TOOL PATH DISCOVERY ---
+$mkvpropedit = Get-Command mkvpropedit.exe -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source
+$mkvmerge    = Get-Command mkvmerge.exe    -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source
+
+# Fallback: If not in PATH, check your specific default location
+if (-not $mkvpropedit) { $mkvpropedit = "C:\Program Files\MKVToolNix\mkvpropedit.exe" }
+if (-not $mkvmerge)    { $mkvmerge    = "C:\Program Files\MKVToolNix\mkvmerge.exe" }
+
+# --- FINAL VALIDATION ---
+$missingTools = @()
+if (-not (Test-Path -LiteralPath $mkvpropedit)) { $missingTools += "mkvpropedit.exe" }
+if (-not (Test-Path -LiteralPath $mkvmerge))    { $missingTools += "mkvmerge.exe" }
+
+if ($missingTools.Count -gt 0) {
+    Write-Host "[!] ERROR: The following tools were not found in PATH or default locations:" -ForegroundColor Red
+    $missingTools | ForEach-Object { Write-Host "  - $_" -ForegroundColor Yellow }
+    Write-Host "`nPlease install MKVToolNix or ensure it is in your System PATH." -ForegroundColor Cyan
+    Pause; exit
+}
 
 if ($PSVersionTable.PSVersion -lt [version]"7.6.1") {
     Write-Host "ERROR: Running on version $($PSVersionTable.PSVersion). This script requires at least 7.6.1." -ForegroundColor Red
@@ -232,20 +234,37 @@ if ($PSVersionTable.PSVersion -lt [version]"7.6.1") {
 
 # 1. Path & Log Initialization
 $inputPaths = New-Object System.Collections.Generic.List[string]
-if ($null -eq $PathParts -or $PathParts.Count -eq 0) {
+
+# Consolidate PathParts check
+if (($null -eq $PathParts -or $PathParts.Count -eq 0) -and -not $DelLog) {
     Write-Host "ERROR: No folder detected. Use the 'Send To' menu or drag a folder onto this script." -ForegroundColor Red
     Pause; exit
-} else {
+} elseif ($PathParts.Count -gt 0) {
     foreach ($part in ($PathParts | Sort-Object)) { 
         $cleaned = $part.Trim('"')
-        if (Test-Path -LiteralPath $cleaned) { $inputPaths.Add($cleaned) }
+        if (Test-Path -LiteralPath $cleaned) { [void]$inputPaths.Add($cleaned) }
     }
 }
 
+# --- LOG FOLDER DEFINITION & CLEANUP ---
 $rootLog = Join-Path $PSScriptRoot "auditor+fixer_logs"
+
+if ($DelLog) {
+    if (Test-Path -LiteralPath $rootLog) {
+        Write-Host " [!] Clearing logs folder..." -ForegroundColor Cyan
+        Remove-Item -LiteralPath $rootLog -Recurse -Force
+        Write-Host " [✓] Logs deleted." -ForegroundColor Green
+    } else {
+        Write-Host " [!] Logs folder not found. Nothing to delete." -ForegroundColor Yellow
+    }
+    # Exit if we only wanted to delete logs
+    if ($inputPaths.Count -eq 0) { exit }
+}
+
 $pLogDir = Join-Path $rootLog "Path_Logs"; $dLogDir = Join-Path $rootLog "Detail_Logs"
 $mLogDir = Join-Path $rootLog "Mismatch_Logs"; $cLogDir = Join-Path $rootLog "Comparison_Logs"
 $fLogDir = Join-Path $rootLog "FIX_QUEUE"
+
 foreach ($dir in @($rootLog,$pLogDir,$dLogDir,$mLogDir,$cLogDir,$fLogDir)) { 
     if (-not (Test-Path $dir)) { New-Item $dir -ItemType Directory | Out-Null } 
 }
@@ -402,16 +421,17 @@ if (Test-Path $configFile) {
 
 # --- STARTUP DISPLAY ---
 Clear-Host
-$version = "2026.05.12_12.41.00"
+$version = "2026.05.12_20.01.00"
 
 # Determine Display Mode, Action, and Override Status
 $modeBase = if ($Western) { "Western Mode" } else { "Anime Mode (default)" }
 $sdhStatus = if ($sdh -or $hi -or $hicc -or $cc -or $SubtitlesHearingImpaired) { " SDH" } else { "" }
 $action = if ($Fix) { "Audit & Fix" } else { "Audit" }
+$recurseStatus = if ($disableRecurse) { " [No-Recurse]" } else { "" }
 $nobackupStatus = if ($FixNoBackup) { " NO BACKUP!" } else { "" }
 $debugStatus = if ($FixDebug) { " Debug" } else { "" }
 $ovrdStatus = if ($overrideDefaults -or $OverrideWesternDefaults) { " override defaults" } else { "" }
-$displayMode = "$modeBase $action$nobackupStatus$debugStatus$ovrdStatus$sdhStatus"
+$displayMode = "$modeBase $action$nobackupStatus$debugStatus$ovrdStatus$sdhStatus$recurseStatus"
 
 Write-Host "=================================================="
 Write-Host "auditor+fixer.ps1 v$version" -ForegroundColor Cyan
@@ -633,7 +653,12 @@ function Write-InlineProgress {
 
 # 3. Main Processing Loop
 # Includes the base folders themselves PLUS all sub-directories
-$targetFolders = Get-ChildItem -LiteralPath $inputPaths -Directory -Recurse | Sort-Object FullName
+$targetFolders = if ($disableRecurse) {
+    # Strictly only use the input paths provided, no sub-directory gathering
+    $inputPaths | ForEach-Object { Get-Item -LiteralPath $_ }
+} else {
+    Get-ChildItem -LiteralPath $inputPaths -Directory -Recurse | Sort-Object FullName
+}
 if ($inputPaths.Count -gt 0) {
     $targetFolders = @($inputPaths | ForEach-Object { Get-Item -LiteralPath $_ }) + $targetFolders | Select-Object -Unique
 }
@@ -831,12 +856,26 @@ foreach ($folderPath in $targetFolders) {
         
         # --- GENERATE FIXER QUEUE & EXECUTE SMART FIX ---
         foreach ($fToFix in $currentGroup.Files) {
+            # 1. Initialize the list FIRST so we can log skips to it
             $fixDetails = New-Object System.Collections.Generic.List[string]
             $Params = @() 
             $needsChange = $false 
             $bestAudioSel = $null; $bestSubSel = $null; $foundPrefAudio = $false
             $subCandidates = @()
+            
+            # 2. Define videoCount
+            $videoCount = ($currentGroup.Json.tracks | Where-Object { $_.type -eq "video" } | Measure-Object).Count
+            
+            # 3. GLOBAL SKIP FOR MULTI-VIDEO FILES
+            if ($videoCount -gt 1) {
+                [void]$fixDetails.Add("FILE: $($fToFix.FullName)")
+                [void]$fixDetails.Add("  [!] SKIPPING FILE: Multiple video tracks detected ($videoCount).")
+                [void]$fixDetails.Add("") # Add spacing
+                $fixDetails | Out-File $fixerLog -Append -Encoding utf8
+                continue 
+            }
 
+            # 4. Standard File Logging (for files that aren't skipped)
             [void]$fixDetails.Add("FILE: $($fToFix.FullName)")
 
             # --- [CRITICAL FIX] RESOLVE TARGET LANGUAGE ONCE PER FILE ---
@@ -848,11 +887,16 @@ foreach ($folderPath in $targetFolders) {
 
             # 1. IDENTIFY TARGETS
             Get-Selector -Reset
+            
+            # NEW: Define videoCount here so the check below works
+            $videoCount = ($currentGroup.Json.tracks | Where-Object { $_.type -eq "video" } | Measure-Object).Count
+            
             foreach ($t in $currentGroup.Json.tracks) {
                 $sel = Get-Selector $t.type
                 
                 # --- VIDEO LOGIC ---
                 if ($t.type -eq "video") {
+                    
                     # 1. Resolve the target language from the -vid command or the JSON config
                     $targetLangInput = if ($videoLanguage) { $videoLanguage } else { $fixerConfig.Video.TargetLanguage }
                     $target = if ($langMap.ContainsKey($targetLangInput.ToLower())) { $langMap[$targetLangInput.ToLower()] } else { $targetLangInput }
