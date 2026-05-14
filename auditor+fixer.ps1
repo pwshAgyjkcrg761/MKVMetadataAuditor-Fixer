@@ -1,6 +1,6 @@
 # ==============================================================================
-# SCRIPT: auditor+fixer.ps1
-# VERSION: v2026.05.13_21.23.00
+# SCRIPT: MKVMetadataAuditor+Fixer.ps1
+# VERSION: v2026.05.14_16.35.00
 # TARGET: PowerShell 7.6.1 LTS
 #
 # Copyright (C) 2026 pwsh.Agyjkcrg761
@@ -22,7 +22,12 @@
 # 3. SCRIPT OUTPUT:
 #    - When printing the script only print snippets unless asked for entire script.
 #    - Always use a codebox with a copy button.
-#    - Show a clear beginning and end to the new code with and example of where to insert.
+# 4. When the user asks for a changelog always print it in a codebox with a copy button.
+# 5. VERBATIM ANCHOR PROTOCOL:
+#    - To facilitate "Find" in Notepad++, always provide "Verbatim Anchors."
+#    - "Verbatim Anchors" are the exact lines of existing code immediately BEFORE and AFTER the insertion point.
+#    - Do not summarize, truncate, or refactor the existing code used as an anchor.
+#    - Copy the existing spaces, comments, and symbols exactly as they appear in the file.
 # ==============================================================================
 # </PROTECTED>
 
@@ -46,6 +51,8 @@ param (
     [Alias("h10p")]
     [switch]$AvcHigh10Search,
     [switch]$fast,
+    [alias("h10pDebug")]
+    [switch]$AvcHigh10SearchDebug,
     
     # New Automation Params
     [Alias("vid")] [string]$videoLanguage,
@@ -81,7 +88,7 @@ function Write-ColorBlock ($Lines, $Color) {
 if ($Help -or $Manual) {
     Clear-Host
     Write-Host "============================================================" -ForegroundColor Cyan
-    Write-Host " auditor+fixer.ps1 - MANUAL & USAGE GUIDE" -ForegroundColor DarkMagenta
+    Write-Host " MKVMetadataAuditor+Fixer.ps1 - MANUAL & USAGE GUIDE" -ForegroundColor DarkMagenta
     Write-Host " Copyright (C) 2026 pwsh.Agyjkcrg761`n" -ForegroundColor DarkCyan
     
      " This program is free software: you can redistribute it and/or",
@@ -113,24 +120,24 @@ if ($Help -or $Manual) {
     "    to verify video profiles and bit-depth accuracy.`n" | ForEach-Object { Write-Host $_ -ForegroundColor DarkGray }
     
     Write-Host "`n USAGE:" -ForegroundColor DarkYellow
-    Write-Host "  .\auditor+fixer.ps1 [Flags] -Path 'G:\Media'" -ForegroundColor DarkGreen
+    Write-Host "  .\MKVMetadataAuditor+Fixer.ps1 [Flags] -Path 'G:\Media'" -ForegroundColor DarkGreen
     
     Write-Host "`n USAGE EXAMPLES:`n" -ForegroundColor DarkYellow
     
     Write-Host "  Standard Audit (No Changes):`n" -ForegroundColor DarkGray
-    Write-Host "    .\auditor+fixer.ps1 -Path 'G:\Media\Anime'`n" -ForegroundColor DarkMagenta
+    Write-Host "    .\MKVMetadataAuditor+Fixer.ps1 -Path 'G:\Media\Anime'`n" -ForegroundColor DarkMagenta
     
     Write-Host "  Automated Fix (JPN Audio / ENG Subs / Honorifics):`n" -ForegroundColor DarkGray
-    Write-Host "    .\auditor+fixer.ps1 -Fix -aud jpn -sub eng -Hon -ovrd -Path 'G:\Media\Anime'`n" -ForegroundColor DarkCyan
+    Write-Host "    .\MKVMetadataAuditor+Fixer.ps1 -Fix -aud jpn -sub eng -Hon -ovrd -Path 'G:\Media\Anime'`n" -ForegroundColor DarkCyan
     
     Write-Host "  Update Video Language (Chinese) & Save to Config:`n" -ForegroundColor DarkGray
-    Write-Host "    .\auditor+fixer.ps1 -Fix -vid chi -vidf -ovrd -Path 'G:\Media\Anime'`n" -ForegroundColor DarkMagenta
+    Write-Host "    .\MKVMetadataAuditor+Fixer.ps1 -Fix -vid chi -vidf -ovrd -Path 'G:\Media\Anime'`n" -ForegroundColor DarkMagenta
 
     Write-Host "  Direct Fix (No Backup) with Codec Priority:`n" -ForegroundColor DarkGray
-    Write-Host "    .\auditor+fixer.ps1 -Fix -FixNoBackup -sc 'ass,srt' -ovrd -Path 'G:\Media\Anime'`n" -ForegroundColor DarkCyan
+    Write-Host "    .\MKVMetadataAuditor+Fixer.ps1 -Fix -FixNoBackup -sc 'ass,srt' -ovrd -Path 'G:\Media\Anime'`n" -ForegroundColor DarkCyan
     
     Write-Host "  AVC High 10 Search Mode (Fast & No-Recurse):`n" -ForegroundColor DarkGray
-    Write-Host "    .\auditor+fixer.ps1 -h10p -fast -nr -Path 'G:\Media\Anime'`n" -ForegroundColor DarkMagenta
+    Write-Host "    .\MKVMetadataAuditor+Fixer.ps1 -h10p -fast -nr -Path 'G:\Media\Anime'`n" -ForegroundColor DarkMagenta
     
     Write-Host "`n CORE FLAGS:`n" -ForegroundColor DarkYellow
 
@@ -163,67 +170,71 @@ if ($Help -or $Manual) {
     "      Search Mode: Scans for AVC High 10 (10-bit) video streams. Use",
     "      with -fast for quicker scanning.`n" | ForEach-Object { Write-Host $_ -ForegroundColor DarkMagenta }
     
+    "  -AvcHigh10SearchDebug | -h10pDebug",
+    "      Enables verbose terminal output during the Search Mode scan,", 
+    "      displaying every file path being processed in real-time.`n" | ForEach-Object { Write-Host $_ -ForegroundColor DarkCyan }
+    
     "  -fast",
     "      Speeds up the AVC High 10 Search by skipping extended metadata",
-    "      checks.`n" | ForEach-Object { Write-Host $_ -ForegroundColor DarkCyan }
+    "      checks. In this mode, progress tracks Folders processed.`n" | ForEach-Object { Write-Host $_ -ForegroundColor DarkMagenta }
 
     "  -disableRecurse | -nr",
     "      Disables subfolder scanning. Only the root of the provided -Path", 
-    "      will be processed.`n"   | ForEach-Object { Write-Host $_ -ForegroundColor DarkMagenta }
+    "      will be processed.`n"   | ForEach-Object { Write-Host $_ -ForegroundColor DarkCyan }
     
     Write-Host "`n TRACK PRIORITIES & AUTOMATION:`n" -ForegroundColor DarkYellow
     
     "  -videoLanguage | -vid <string>",
     "      Targets the video track language. Note: This is applied",
     "      automatically if the file requires other fixes. -vidf is",
-    "      only required if the file is already 'perfect'.`n"  | ForEach-Object { Write-Host $_ -ForegroundColor DarkCyan }
+    "      only required if the file is already 'perfect'.`n"  | ForEach-Object { Write-Host $_ -ForegroundColor DarkMagenta }
 
     "  -videoForceUpdate | -vidf",
     "      The safety toggle for video metadata. This must be present",
     "      to confirm you want to change the video track language on",
-    "      files that otherwise pass the audit.`n"  | ForEach-Object { Write-Host $_ -ForegroundColor DarkMagenta }
+    "      files that otherwise pass the audit.`n"  | ForEach-Object { Write-Host $_ -ForegroundColor DarkCyan }
     
     "  -audioLanguagePriority | -aud <string>",
     "      Sets the 3-letter ISO code (e.g., 'jpn') for your primary audio.",
-    "      It will automatically set this track as the 'Default' choice.`n"   | ForEach-Object { Write-Host $_ -ForegroundColor DarkCyan }
+    "      It will automatically set this track as the 'Default' choice.`n"   | ForEach-Object { Write-Host $_ -ForegroundColor DarkMagenta }
     
     "  -subtitleLanguagePriority | -sub <string>", 
     "      Sets the primary subtitle language. The script uses weighted",
-    "      scoring to find the best dialogue track in this language.`n"  | ForEach-Object { Write-Host $_ -ForegroundColor DarkMagenta }
+    "      scoring to find the best dialogue track in this language.`n"  | ForEach-Object { Write-Host $_ -ForegroundColor DarkCyan }
     
     "  -subtitleCodecPriority | -sc <string>",
     "      A comma-separated list (e.g., 'ass,srt') that dictates which",
-    "      subtitle formats to prefer when multiple tracks are available.`n"  | ForEach-Object { Write-Host $_ -ForegroundColor DarkCyan }
+    "      subtitle formats to prefer when multiple tracks are available.`n"  | ForEach-Object { Write-Host $_ -ForegroundColor DarkMagenta }
     
     "  -Hon | -Honorifics",
     "      Injects a +300 score bonus to tracks labeled with 'honorifics'",
-    "      or 'enm', ensuring they are selected over standard dialogue.`n"  | ForEach-Object { Write-Host $_ -ForegroundColor DarkMagenta }
+    "      or 'enm', ensuring they are selected over standard dialogue.`n"  | ForEach-Object { Write-Host $_ -ForegroundColor DarkCyan }
     
     Write-Host "`n WESTERN SPECIFIC:`n" -ForegroundColor DarkYellow
 
     "  -sdh | -hi | -hicc | -cc | -SubtitlesHearingImpaired",
     "      Forces the script to prioritize 'Hearing Impaired' or 'SDH'",
-    "      subtitle tracks for Western media.`n"  | ForEach-Object { Write-Host $_ -ForegroundColor DarkCyan }
+    "      subtitle tracks for Western media.`n"  | ForEach-Object { Write-Host $_ -ForegroundColor DarkMagenta }
     
     "  -OverrideWesternDefaults | -ovrdw",
     "      Allows the script to save custom Western mode parameters to",
-    "      the JSON configuration.`n"  | ForEach-Object { Write-Host $_ -ForegroundColor DarkMagenta }
+    "      the JSON configuration.`n"  | ForEach-Object { Write-Host $_ -ForegroundColor DarkCyan }
 
     Write-Host "`n GENERAL:`n" -ForegroundColor DarkYellow
     
     "  -help | -manual",
-    "      Displays this manual for auditor+fixer.ps1. The one you are",
-    "      reading right now.`n"  | ForEach-Object { Write-Host $_ -ForegroundColor DarkCyan }
+    "      Displays this manual for MKVMetadataAuditor+Fixer.ps1. The one you are",
+    "      reading right now.`n"  | ForEach-Object { Write-Host $_ -ForegroundColor DarkMagenta }
     
     "  -DelLog",
-    "      Clears all files within the logs directory (auditor+fixer_logs) before",
+    "      Clears all files within the logs directory (MKVMetadataAuditor+Fixer_logs) before",
     "      starting the operation.`n"  | ForEach-Object { Write-Host $_ -ForegroundColor DarkRed }
     
 
     Write-Host "`n NOTES:" -ForegroundColor DarkYellow
     "  * SCORING: Automatically penalizes 'Signs/Songs' tracks.",
     "  * CONFIG: -ovrd is REQUIRED when using automation flags to save to JSON.",
-    "  * LOGS: Detailed reports are saved to: $rootLog"  | ForEach-Object { Write-Host $_ -ForegroundColor DarkGray }
+    "  * LOGS: Detailed reports are saved to: MKVMetadataAuditor+Fixer_logs\Detail_Logs"  | ForEach-Object { Write-Host $_ -ForegroundColor DarkGray }
     
     Write-Host "`n============================================================" -ForegroundColor Cyan
     Write-Host " Press any key to exit..." -ForegroundColor DarkYellow
@@ -261,7 +272,7 @@ if ($sdhActive -and -not $Western) {
 # AVC High 10 Profile Whitelist Validation
 if ($AvcHigh10Search) {
     # Define exactly what IS allowed
-    $allowedH10pFlags = @('AvcHigh10Search', 'Fast', 'disableRecurse', 'Path', 'h10p', 'PathParts')
+    $allowedH10pFlags = @('AvcHigh10Search', 'AvcHigh10SearchDebug', 'Fast', 'disableRecurse', 'Path', 'h10p', 'h10pDebug', 'PathParts')
 
     # Check every flag the user actually typed
     foreach ($param in $PSBoundParameters.Keys) {
@@ -280,7 +291,8 @@ if ($AvcHigh10Search) {
 if ($host.Name -eq "ConsoleHost") { $ErrorActionPreference = "Continue" }
 # -----------------------------------
 
-$ProgressPreference = 'SilentlyContinue' # Speeds up network directory scanning
+#$ProgressPreference = 'SilentlyContinue' # Speeds up network directory scanning
+$ProgressPreference = 'Continue'
 
 # --- TOOL PATH DISCOVERY ---
 $mkvpropedit = Get-Command mkvpropedit.exe -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source
@@ -329,7 +341,7 @@ if (($null -eq $PathParts -or $PathParts.Count -eq 0) -and -not $DelLog) {
 
 # --- LOG FOLDER DEFINITION & CLEANUP ---
 # Define all directory variables
-$rootLog = Join-Path $PSScriptRoot "auditor+fixer_logs"
+$rootLog = Join-Path $PSScriptRoot "MKVMetadataAuditor+Fixer_logs"
 
 if ($DelLog) {
     if (Test-Path -LiteralPath $rootLog) {
@@ -357,21 +369,31 @@ foreach ($dir in @($rootLog,$pLogDir,$dLogDir,$mLogDir,$cLogDir,$fLogDir,$h10pLo
 }
 
 # Define the individual log files using that single $ts
-$pathLog = Join-Path $pLogDir "auditor+fixer_Paths_$($ts)-log.txt"
-$detailLog = Join-Path $dLogDir "auditor+fixer_Details_$($ts)-log.txt"
-$missLog = Join-Path $mLogDir "auditor+fixer_Mismatches_$($ts)-log.txt"
-$compLog = Join-Path $cLogDir "auditor+fixer_Comparison_$($ts)-log.txt"
-$fixerLog = Join-Path $fLogDir "auditor+fixer_FIX_QUEUE_$($ts)-log.txt"
-$h10pLog = Join-Path $h10pLogDir "auditor+fixer_AVC_High_10_$($ts)-log.txt"
+$pathLog = Join-Path $pLogDir "MKVMetadataAuditor+Fixer_Paths_$($ts)-log.txt"
+$detailLog = Join-Path $dLogDir "MKVMetadataAuditor+Fixer_Details_$($ts)-log.txt"
+$missLog = Join-Path $mLogDir "MKVMetadataAuditor+Fixer_Mismatches_$($ts)-log.txt"
+$compLog = Join-Path $cLogDir "MKVMetadataAuditor+Fixer_Comparison_$($ts)-log.txt"
+$fixerLog = Join-Path $fLogDir "MKVMetadataAuditor+Fixer_FIX_QUEUE_$($ts)-log.txt"
+$h10pLog = Join-Path $h10pLogDir "MKVMetadataAuditor+Fixer_AVC_High_10_$($ts)-log.txt"
 $h10pList = New-Object System.Collections.Generic.List[string]
-$h10pCount   = 0
+$h10pCount = 0
 
+# Load Exclusions
+# [CHANGE] v2026.05.14_16.48.00 - MKV-Metadata-Auditor_Excluded-Paths.txt Integration
+$excludeFile = Join-Path $PSScriptRoot "MKVMetadataAuditor+Fixer_Excluded-Paths.txt"
+$exclusions = if (Test-Path $excludeFile) { 
+    Get-Content $excludeFile | Where-Object { -not [string]::IsNullOrWhiteSpace($_) -and -not $_.StartsWith("#") } | ForEach-Object { $_.Trim().TrimEnd('\') }
+} else { @() }
+
+if ($exclusions.Count -gt 0) {
+    Write-Host "[i] Loaded $($exclusions.Count) exclusion rules." -ForegroundColor Yellow
+}
 
 # --- CONFIGURATION DEFAULTS ---
-$configFile = Join-Path $PSScriptRoot "auditor-fixer--FixerDefaults.json"
+$configFile = Join-Path $PSScriptRoot "MKVMetadataAuditor+Fixer--FixerDefaults.json"
 
 # --- WESTERN PROFILE HANDLER ---
-$westernFile = Join-Path $PSScriptRoot "auditor-fixer--WesternDefaults.json"
+$westernFile = Join-Path $PSScriptRoot "MKVMetadataAuditor+Fixer--WesternDefaults.json"
 
 if ($Western) {
     # If Western mode is on but the file is missing, create it from the Anime template
@@ -511,7 +533,7 @@ if (Test-Path $configFile) {
 
 # --- STARTUP DISPLAY ---
 #Clear-Host
-$version = "2026.05.13_21.23.00"
+$version = "2026.05.14_16.35.00"
 
 # Determine Display Mode, Action, and Override Status
 if ($AvcHigh10Search -or $h10p) {
@@ -530,7 +552,7 @@ if ($AvcHigh10Search -or $h10p) {
 }
 
 Write-Host "=================================================="
-Write-Host "auditor+fixer.ps1 v$version" -ForegroundColor Cyan
+Write-Host "MKVMetadataAuditor+Fixer.ps1 v$version" -ForegroundColor Cyan
 Write-Host "=================================================="
 Write-Host $displayMode -ForegroundColor Blue
 if ($FixNoBackup) {
@@ -554,7 +576,7 @@ foreach ($p in $inputPaths) { Write-Host "  -> $p" -ForegroundColor Blue }
 if ($Fix) {
     Write-Host "Destination Folder(s):" -ForegroundColor Green
     if ($FixNoBackup) {
-        # Flash loop: alternates between Red and Yellow 6 times
+        # Flash loop: alternates between DarkRed and DarkYellow 6 times
         for ($i = 0; $i -lt 6; $i++) {
             $flashColor = if ($i % 2 -eq 0) { "DarkRed" } else { "DarkYellow" }
             Write-Host -NoNewline "`r  -> SOURCE WILL BE OVERWRITTEN" -ForegroundColor $flashColor
@@ -760,6 +782,7 @@ function Write-InlineProgress {
     # Using ${Message} ensures the colon is treated as plain text
     # PadRight(100) ensures the entire line is cleared before writing the new one
     $progressLine = "`r[SHIELD] ${Message}: [$bar] $percent% ($Current/$Total)".PadRight(100)
+
     
     Write-Host -NoNewline $progressLine -ForegroundColor Cyan
 }
@@ -783,7 +806,33 @@ $logBuffer = New-Object System.Collections.Generic.List[string]
 $lastFlushTime = [DateTime]::Now
 
 # Folder Loop
+$videoExtensions = @("*.mkv", "*.mp4", "*.m4v", "*.avi", "*.wmv", "*.flv", "*.mov", "*.ts", "*.m2ts", "*.ogm")
+$Host.PrivateData.ProgressForegroundColor = "Cyan"
+if ($fast) {
+    $totalSessionItems = $targetFolders.Count
+} else {
+    Write-Host " [i] Initializing session: Counting video files..." -ForegroundColor DarkCyan
+    $sessionFileList = New-Object System.Collections.Generic.List[string]
+    $folderCounter = 0
+    
+    foreach ($folder in $targetFolders) {
+        $folderCounter++
+        Write-Progress -Activity "Initializing Session" -Status "Scanning Folder $folderCounter of $($targetFolders.Count)" -PercentComplete ([int]($folderCounter / $targetFolders.Count * 100))
+        
+        $found = Get-ChildItem -LiteralPath $folder.FullName -Include $videoExtensions -File -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName
+        if ($found) { $found | ForEach-Object { $sessionFileList.Add([string]$_) } }
+    }
+    $totalSessionItems = ($sessionFileList | Select-Object -Unique).Count
+    Write-Host " [i] Total video files found: $totalSessionItems" -ForegroundColor DarkGreen
+    Write-Progress -Activity "Initializing Session" -Completed
+}
+$sessionProgressIndex = 0
 foreach ($folderPath in $targetFolders) {
+    $currentPathClean = $folderPath.FullName.TrimEnd('\')
+    if ($exclusions -contains $currentPathClean) {
+        Write-Host " [SKIP] Folder excluded by rule: $($folderPath.Name)" -ForegroundColor DarkGray
+        continue
+    }
     Write-Host "Checking: $($folderPath.FullName)..." -ForegroundColor Gray # <--- LIVE FEEDBACK
     $global:GroupMap = @{}
     $global:Counter = 1
@@ -807,18 +856,36 @@ foreach ($folderPath in $targetFolders) {
     # v2026.05.13_16.08.00 - Finalized Spacing & One-Time Fast Header
     if ($AvcHigh10Search) {
         $scanFiles = if ($fast) { $mkvFiles | Select-Object -First 1 } else { $mkvFiles }
+        $currentFileIndex = 0
         
         foreach ($f in $scanFiles) {
+            $sessionProgressIndex++
+            
+            # Call the custom Auditor function
+            # Update the progress bar only every 10 files (or if it's the last file)
+            if ($sessionProgressIndex % 10 -eq 0 -or $sessionProgressIndex -eq $totalSessionItems) {
+                $statusMsg = if ($fast) { "Processing Folders" } else { "Processing Files" }
+                Write-InlineProgress -Current $sessionProgressIndex -Total $totalSessionItems -Message $statusMsg
+            }
+            
+            # Write-Progress -Activity "Total Session Progress" -Status $statusMsg -PercentComplete $percent
+            # If debugging, ensure we move to a new line so the bar remains visible
+            if ($AvcHigh10SearchDebug) { 
+                Write-Host "`n [DEBUG] Scanning: $($f.Name)" -ForegroundColor Gray 
+            }
             if (Test-Path -LiteralPath $mediainfo) {
                 $profile = (& $mediainfo --Inform="Video;%Format_Profile%" "$($f.FullName)").ToString().Trim()
                 if ($profile -match "High.*10") {
                     $h10pCount++
                     $h10pList.Add($f.FullName)
-                    Write-Host "  [!] Found AVC High 10: $($f.Name)" -ForegroundColor Yellow
+                    Write-Host "`n"
+                    
+                    Write-Host "  [!] Found AVC High 10: $($f.Name)" -ForegroundColor DarkYellow
                 }
             }
         }
-
+        Write-Host "" # Clears the inline progress line
+        
         # v2026.05.13_16.32.00 - Periodic 60-Second Flush
         if ($h10pList.Count -gt 0) {
             $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm"
