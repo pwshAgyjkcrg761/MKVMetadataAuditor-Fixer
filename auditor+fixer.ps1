@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: auditor+fixer.ps1
-# VERSION: v2026.05.13_17.02.00
+# VERSION: v2026.05.13_21.23.00
 # TARGET: PowerShell 7.6.1 LTS
 #
 # Copyright (C) 2026 pwsh.Agyjkcrg761
@@ -35,6 +35,7 @@ param (
     [switch]$Fix,        # Activates the Fixer module
     [switch]$FixDebug,
     [switch]$FixNoBackup,    # Disables the automatic 1-by-1 backup
+    [Alias("nr")]
     [switch]$disableRecurse, # New flag to disable sub-directory scanning
     [switch]$DelLog,         # New flag to clear the logs folder
     [Alias("Honorifics")]
@@ -42,7 +43,7 @@ param (
     [Alias("ovrd")]
     [switch]$overrideDefaults,
     
-    [switch]$h10p,
+    [Alias("h10p")]
     [switch]$AvcHigh10Search,
     [switch]$fast,
     
@@ -54,17 +55,14 @@ param (
     [Alias("sc")]  [string]$subtitleCodecPriority,
     
     # New Western Mode Flags
-    [Alias("west", "WesternMode")]
+    [Alias("west", "WesternMode", "w")]
     [switch]$Western,
     [Alias("ovrdw")]
     [Switch]$OverrideWesternDefaults,
     
     # Western Mode Hearing Impaired Subs
+    [Alias("hi", "hicc", "cc", "SubtitlesHearingImpaired")]
     [switch]$sdh,
-    [switch]$hi,
-    [switch]$hicc,
-    [switch]$cc,
-    [switch]$SubtitlesHearingImpaired,
     
     #[Parameter(Mandatory=$false)]
     [switch]$Help,
@@ -74,6 +72,11 @@ param (
     
 )
 
+# HELP & MANUAL SYSTEM FUNCTIONS
+function Write-ColorBlock ($Lines, $Color) {
+    foreach ($line in $Lines) { Write-Host $line -ForegroundColor $Color }
+}
+
 # --- HELP & MANUAL SYSTEM ---
 if ($Help -or $Manual) {
     Clear-Host
@@ -81,20 +84,33 @@ if ($Help -or $Manual) {
     Write-Host " auditor+fixer.ps1 - MANUAL & USAGE GUIDE" -ForegroundColor DarkMagenta
     Write-Host " Copyright (C) 2026 pwsh.Agyjkcrg761`n" -ForegroundColor DarkCyan
     
-    Write-Host " This program is free software: you can redistribute it and/or" -ForegroundColor DarkMagenta
-    Write-Host " modify it under the terms of the GNU General Public License as" -ForegroundColor DarkMagenta
-    Write-Host " published by the Free Software Foundation, either version 3 of" -ForegroundColor DarkMagenta
-    Write-Host " the License, or (at your option) any later version." -ForegroundColor DarkMagenta
+     " This program is free software: you can redistribute it and/or",
+     " modify it under the terms of the GNU General Public License as",
+     " published by the Free Software Foundation, either version 3 of",
+     " the License, or (at your option) any later version."  | ForEach-Object { Write-Host $_ -ForegroundColor DarkMagenta }
     Write-Host "============================================================" -ForegroundColor Cyan
     
     Write-Host "`n OVERVIEW:" -ForegroundColor DarkYellow
-    Write-Host "  This utility is a high-fidelity media management tool designed to ensure" -ForegroundColor DarkCyan
-    Write-Host "  structural consistency across MKV libraries. It operates in two stages:" -ForegroundColor DarkCyan
-    Write-Host "  1. AUDIT: Scans files to identify 'Mismatch Groups' and track errors." -ForegroundColor DarkCyan
-    Write-Host "  2. FIX:  Uses Mkvpropedit to align tracks with your preferred defaults." -ForegroundColor DarkCyan
+     "  This utility is a high-fidelity media management tool designed to ensure",
+     "  structural consistency across MKV libraries. It operates in two stages:",
+     "  1. AUDIT: Scans files to identify 'Mismatch Groups' and track errors.",
+     "  2. FIX:  Uses Mkvpropedit to align tracks with your preferred defaults.",
+     "  3. SEARCH: Locates specific video profiles like AVC High 10 (10-bit).`n",
 
-    Write-Host "`n  The script intelligently handles track scoring, automatically penalizing" -ForegroundColor DarkCyan
-    Write-Host "  'Signs & Songs' tracks while prioritizing full dialogue and honorifics." -ForegroundColor DarkCyan
+    "`n  This script intelligently handles track scoring, automatically penalizing",
+    "  'Signs & Songs' tracks while prioritizing full dialogue and honorifics.",
+    
+    "  The AVC High 10 Search (-h10p) bypasses standard auditing to quickly",
+    "  isolate legacy 10-bit encodes that may cause hardware compatibility",
+    "  issues, supporting both deep-dive and fast-scan logic.`n"   | ForEach-Object { Write-Host $_ -ForegroundColor DarkCyan }
+    
+    Write-Host " DEPENDENCIES:" -ForegroundColor DarkYellow
+    "  • MKVToolNix (mkvmerge): Used for deep-probing file headers and", 
+    "    extracting detailed track metadata for the audit.", 
+    "  • MKVToolNix (mkvpropedit): The primary tool for the 'Fix' engine,", 
+    "    allowing instant metadata edits without remuxing the file.", 
+    "  • MediaInfo: Utilized specifically during AVC High 10 searches", 
+    "    to verify video profiles and bit-depth accuracy.`n" | ForEach-Object { Write-Host $_ -ForegroundColor DarkGray }
     
     Write-Host "`n USAGE:" -ForegroundColor DarkYellow
     Write-Host "  .\auditor+fixer.ps1 [Flags] -Path 'G:\Media'" -ForegroundColor DarkGreen
@@ -113,65 +129,101 @@ if ($Help -or $Manual) {
     Write-Host "  Direct Fix (No Backup) with Codec Priority:`n" -ForegroundColor DarkGray
     Write-Host "    .\auditor+fixer.ps1 -Fix -FixNoBackup -sc 'ass,srt' -ovrd -Path 'G:\Media\Anime'`n" -ForegroundColor DarkCyan
     
+    Write-Host "  AVC High 10 Search Mode (Fast & No-Recurse):`n" -ForegroundColor DarkGray
+    Write-Host "    .\auditor+fixer.ps1 -h10p -fast -nr -Path 'G:\Media\Anime'`n" -ForegroundColor DarkMagenta
+    
     Write-Host "`n CORE FLAGS:`n" -ForegroundColor DarkYellow
 
-    Write-Host "  -Path <string>" -ForegroundColor DarkMagenta
-    Write-Host "      Defines the target directory. The script will recursively scan all" -ForegroundColor DarkMagenta
-    Write-Host "      subfolders for MKV files to perform bulk auditing.`n" -ForegroundColor DarkMagenta
+    "  -Path <string>",
+    "      Defines the target directory. The script will recursively scan all",
+    "      subfolders for MKV files to perform bulk auditing.`n" | ForEach-Object { Write-Host $_ -ForegroundColor DarkMagenta }
 
-    Write-Host "  -Fix" -ForegroundColor DarkCyan
-    Write-Host "      Enables 'Write Mode'. Without this, the script runs in read-only" -ForegroundColor DarkCyan
-    Write-Host "      audit mode, generating logs without modifying any files.`n" -ForegroundColor DarkCyan
+    "  -Fix",
+    "      Enables 'Write Mode'. Without this, the script runs in read-only",
+    "      audit mode, generating logs without modifying any files.`n" | ForEach-Object { Write-Host $_ -ForegroundColor DarkCyan }
                     
-    Write-Host "  -FixDebug" -ForegroundColor DarkMagenta
-    Write-Host "      Prints the exact Mkvpropedit command strings to the console before" -ForegroundColor DarkMagenta
-    Write-Host "      execution—ideal for verifying complex logic changes.`n" -ForegroundColor DarkMagenta
+    "  -FixDebug",
+    "      Prints the exact Mkvpropedit command strings to the console before",
+    "      execution—ideal for verifying complex logic changes.`n" | ForEach-Object { Write-Host $_ -ForegroundColor DarkMagenta }
     
-    Write-Host "  -FixNoBackup" -ForegroundColor DarkRed
-    Write-Host "      Disables the '_updated' sibling folder creation. Use with caution," -ForegroundColor DarkRed
-    Write-Host "      as this overwrites metadata directly on the source files.`n" -ForegroundColor DarkRed
+    "  -FixNoBackup",
+    "      Disables the '_updated' sibling folder creation. Use with caution,",
+    "      as this overwrites metadata directly on the source files.`n"  | ForEach-Object { Write-Host $_ -ForegroundColor DarkRed }
     
-    Write-Host "  -overrideDefaults | -ovrd" -ForegroundColor DarkCyan
-    Write-Host "      Mandatory when using automation flags. It allows the script to" -ForegroundColor DarkCyan
-    Write-Host "      write your current session parameters into the JSON config file.`n" -ForegroundColor DarkCyan
+    "  -overrideDefaults | -ovrd",
+    "      Mandatory when using automation flags. It allows the script to",
+    "      write your current session parameters into the JSON config file.`n" | ForEach-Object { Write-Host $_ -ForegroundColor DarkMagenta }
+    
+    Write-Host "`n MODE FLAGS:`n" -ForegroundColor DarkYellow
+
+    "  -Western | -w | west | WesternMode",
+    "      Sets defaults for Western media (English audio/subs).`n" | ForEach-Object { Write-Host $_ -ForegroundColor DarkCyan }
+
+    "  -AvcHigh10Search | -h10p",
+    "      Search Mode: Scans for AVC High 10 (10-bit) video streams. Use",
+    "      with -fast for quicker scanning.`n" | ForEach-Object { Write-Host $_ -ForegroundColor DarkMagenta }
+    
+    "  -fast",
+    "      Speeds up the AVC High 10 Search by skipping extended metadata",
+    "      checks.`n" | ForEach-Object { Write-Host $_ -ForegroundColor DarkCyan }
+
+    "  -disableRecurse | -nr",
+    "      Disables subfolder scanning. Only the root of the provided -Path", 
+    "      will be processed.`n"   | ForEach-Object { Write-Host $_ -ForegroundColor DarkMagenta }
     
     Write-Host "`n TRACK PRIORITIES & AUTOMATION:`n" -ForegroundColor DarkYellow
     
-    Write-Host "  -videoLanguage | -vid <string>" -ForegroundColor DarkCyan
-    Write-Host "      Targets the video track language. Note: This requires the -vidf" -ForegroundColor DarkCyan
-    Write-Host "      flag to trigger a physical metadata update.`n" -ForegroundColor DarkCyan
+    "  -videoLanguage | -vid <string>",
+    "      Targets the video track language. Note: This is applied",
+    "      automatically if the file requires other fixes. -vidf is",
+    "      only required if the file is already 'perfect'.`n"  | ForEach-Object { Write-Host $_ -ForegroundColor DarkCyan }
 
-    Write-Host "  -videoForceUpdate | -vidf" -ForegroundColor DarkMagenta
-    Write-Host "      The safety toggle for video metadata. This must be present to" -ForegroundColor DarkMagenta
-    Write-Host "      confirm you want to change the video track language.`n" -ForegroundColor DarkMagenta
+    "  -videoForceUpdate | -vidf",
+    "      The safety toggle for video metadata. This must be present",
+    "      to confirm you want to change the video track language on",
+    "      files that otherwise pass the audit.`n"  | ForEach-Object { Write-Host $_ -ForegroundColor DarkMagenta }
     
-    Write-Host "  -audioLanguagePriority | -aud <string>" -ForegroundColor DarkCyan
-    Write-Host "      Sets the 3-letter ISO code (e.g., 'jpn') for your primary audio." -ForegroundColor DarkCyan
-    Write-Host "      It will automatically set this track as the 'Default' choice.`n" -ForegroundColor DarkCyan
+    "  -audioLanguagePriority | -aud <string>",
+    "      Sets the 3-letter ISO code (e.g., 'jpn') for your primary audio.",
+    "      It will automatically set this track as the 'Default' choice.`n"   | ForEach-Object { Write-Host $_ -ForegroundColor DarkCyan }
     
-    Write-Host "  -subtitleLanguagePriority | -sub <string>" -ForegroundColor DarkMagenta
-    Write-Host "      Sets the primary subtitle language. The script uses weighted" -ForegroundColor DarkMagenta
-    Write-Host "      scoring to find the best dialogue track in this language.`n" -ForegroundColor DarkMagenta
+    "  -subtitleLanguagePriority | -sub <string>", 
+    "      Sets the primary subtitle language. The script uses weighted",
+    "      scoring to find the best dialogue track in this language.`n"  | ForEach-Object { Write-Host $_ -ForegroundColor DarkMagenta }
     
-    Write-Host "  -subtitleCodecPriority | -sc <string>" -ForegroundColor DarkCyan
-    Write-Host "      A comma-separated list (e.g., 'ass,srt') that dictates which" -ForegroundColor DarkCyan
-    Write-Host "      subtitle formats to prefer when multiple tracks are available.`n" -ForegroundColor DarkCyan
+    "  -subtitleCodecPriority | -sc <string>",
+    "      A comma-separated list (e.g., 'ass,srt') that dictates which",
+    "      subtitle formats to prefer when multiple tracks are available.`n"  | ForEach-Object { Write-Host $_ -ForegroundColor DarkCyan }
     
-    Write-Host "  -Hon | -Honorifics" -ForegroundColor DarkMagenta
-    Write-Host "      Injects a +300 score bonus to tracks labeled with 'honorifics'" -ForegroundColor DarkMagenta
-    Write-Host "      or 'enm', ensuring they are selected over standard dialogue.`n" -ForegroundColor DarkMagenta
+    "  -Hon | -Honorifics",
+    "      Injects a +300 score bonus to tracks labeled with 'honorifics'",
+    "      or 'enm', ensuring they are selected over standard dialogue.`n"  | ForEach-Object { Write-Host $_ -ForegroundColor DarkMagenta }
+    
+    Write-Host "`n WESTERN SPECIFIC:`n" -ForegroundColor DarkYellow
+
+    "  -sdh | -hi | -hicc | -cc | -SubtitlesHearingImpaired",
+    "      Forces the script to prioritize 'Hearing Impaired' or 'SDH'",
+    "      subtitle tracks for Western media.`n"  | ForEach-Object { Write-Host $_ -ForegroundColor DarkCyan }
+    
+    "  -OverrideWesternDefaults | -ovrdw",
+    "      Allows the script to save custom Western mode parameters to",
+    "      the JSON configuration.`n"  | ForEach-Object { Write-Host $_ -ForegroundColor DarkMagenta }
 
     Write-Host "`n GENERAL:`n" -ForegroundColor DarkYellow
     
-    Write-Host "  -help | -manual" -ForegroundColor DarkCyan
-    Write-Host "      Displays this manual for auditor+fixer.ps1. The one you are" -ForegroundColor DarkCyan
-    Write-Host "      reading right now.`n" -ForegroundColor DarkCyan
+    "  -help | -manual",
+    "      Displays this manual for auditor+fixer.ps1. The one you are",
+    "      reading right now.`n"  | ForEach-Object { Write-Host $_ -ForegroundColor DarkCyan }
+    
+    "  -DelLog",
+    "      Clears all files within the logs directory (auditor+fixer_logs) before",
+    "      starting the operation.`n"  | ForEach-Object { Write-Host $_ -ForegroundColor DarkRed }
     
 
     Write-Host "`n NOTES:" -ForegroundColor DarkYellow
-    Write-Host "  * SCORING: Automatically penalizes 'Signs/Songs' tracks." -ForegroundColor DarkGray
-    Write-Host "  * CONFIG: -ovrd is REQUIRED when using automation flags to save to JSON." -ForegroundColor DarkGray
-    Write-Host "  * LOGS: Detailed reports are saved to: $rootLog" -ForegroundColor DarkGray
+    "  * SCORING: Automatically penalizes 'Signs/Songs' tracks.",
+    "  * CONFIG: -ovrd is REQUIRED when using automation flags to save to JSON.",
+    "  * LOGS: Detailed reports are saved to: $rootLog"  | ForEach-Object { Write-Host $_ -ForegroundColor DarkGray }
     
     Write-Host "`n============================================================" -ForegroundColor Cyan
     Write-Host " Press any key to exit..." -ForegroundColor DarkYellow
@@ -209,7 +261,7 @@ if ($sdhActive -and -not $Western) {
 # AVC High 10 Profile Whitelist Validation
 if ($AvcHigh10Search) {
     # Define exactly what IS allowed
-    $allowedH10pFlags = @('AvcHigh10Search', 'Fast', 'disableRecursive', 'Path', 'h10p', 'PathParts')
+    $allowedH10pFlags = @('AvcHigh10Search', 'Fast', 'disableRecurse', 'Path', 'h10p', 'PathParts')
 
     # Check every flag the user actually typed
     foreach ($param in $PSBoundParameters.Keys) {
@@ -217,7 +269,7 @@ if ($AvcHigh10Search) {
             Write-Host ""
             Write-Host " [!] ERROR: Invalid flag combination." -ForegroundColor DarkRed
             Write-Host " When using -h10p, you cannot use -$param." -ForegroundColor DarkYellow
-            Write-Host " Permitted with -h10p: -Fast, -disableRecursive, and -Path." -ForegroundColor Gray
+            Write-Host " Permitted with -h10p: -Fast, -disableRecurse, and -Path." -ForegroundColor Gray
             Write-Host ""
             exit
         }
@@ -233,23 +285,26 @@ $ProgressPreference = 'SilentlyContinue' # Speeds up network directory scanning
 # --- TOOL PATH DISCOVERY ---
 $mkvpropedit = Get-Command mkvpropedit.exe -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source
 $mkvmerge    = Get-Command mkvmerge.exe    -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source
+$mediainfo   = Get-Command MediaInfo.exe   -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source
 
-$mediainfo = "C:\tools\MediaInfo_CLI\MediaInfo.exe"
+
 
 
 # Fallback: If not in PATH, check your specific default location
 if (-not $mkvpropedit) { $mkvpropedit = "C:\Program Files\MKVToolNix\mkvpropedit.exe" }
 if (-not $mkvmerge)    { $mkvmerge    = "C:\Program Files\MKVToolNix\mkvmerge.exe" }
+if (-not $mediainfo)   { $mediainfo   = "C:\Program Files\MediaInfo\MediaInfo.exe" }
 
 # --- FINAL VALIDATION ---
 $missingTools = @()
 if (-not (Test-Path -LiteralPath $mkvpropedit)) { $missingTools += "mkvpropedit.exe" }
 if (-not (Test-Path -LiteralPath $mkvmerge))    { $missingTools += "mkvmerge.exe" }
+if (-not (Test-Path -LiteralPath $mediainfo))   { $missingTools += "MediaInfo.exe" }
 
 if ($missingTools.Count -gt 0) {
     Write-Host "[!] ERROR: The following tools were not found in PATH or default locations:" -ForegroundColor DarkRed
     $missingTools | ForEach-Object { Write-Host "  - $_" -ForegroundColor DarkYellow }
-    Write-Host "`nPlease install MKVToolNix or ensure it is in your System PATH." -ForegroundColor Cyan
+    Write-Host "`nPlease install MKVToolNix and MediaInfo CLI or ensure they are in your System PATH." -ForegroundColor Cyan
     Pause; exit
 }
 
@@ -456,17 +511,23 @@ if (Test-Path $configFile) {
 
 # --- STARTUP DISPLAY ---
 #Clear-Host
-$version = "2026.05.13_17.02.00"
+$version = "2026.05.13_21.23.00"
 
 # Determine Display Mode, Action, and Override Status
-$modeBase = if ($Western) { "Western Mode" } else { "Anime Mode (default)" }
-$sdhStatus = if ($sdh -or $hi -or $hicc -or $cc -or $SubtitlesHearingImpaired) { " SDH" } else { "" }
-$action = if ($Fix) { "Audit & Fix" } else { "Audit" }
-$recurseStatus = if ($disableRecurse) { " [No-Recurse]" } else { "" }
-$nobackupStatus = if ($FixNoBackup) { " NO BACKUP!" } else { "" }
-$debugStatus = if ($FixDebug) { " Debug" } else { "" }
-$ovrdStatus = if ($overrideDefaults -or $OverrideWesternDefaults) { " override defaults" } else { "" }
-$displayMode = "$modeBase $action$nobackupStatus$debugStatus$ovrdStatus$sdhStatus$recurseStatus"
+if ($AvcHigh10Search -or $h10p) {
+    $fastStatus = if ($fast) { " Fast" } else { "" }
+    $recurseStatus = if ($disableRecurse) { " [No-Recurse]" } else { "" }
+    $displayMode = "AVC High 10 Search Mode$fastStatus$recurseStatus"
+} else {
+    $modeBase = if ($Western) { "Western Mode" } else { "Anime Mode (default)" }
+    $sdhStatus = if ($sdh -or $hi -or $hicc -or $cc -or $SubtitlesHearingImpaired) { " SDH" } else { "" }
+    $action = if ($Fix) { "Audit & Fix" } else { "Audit" }
+    $recurseStatus = if ($disableRecurse) { " [No-Recurse]" } else { "" }
+    $nobackupStatus = if ($FixNoBackup) { " NO BACKUP!" } else { "" }
+    $debugStatus = if ($FixDebug) { " Debug" } else { "" }
+    $ovrdStatus = if ($overrideDefaults -or $OverrideWesternDefaults) { " override defaults" } else { "" }
+    $displayMode = "$modeBase $action$nobackupStatus$debugStatus$ovrdStatus$sdhStatus$recurseStatus"
+}
 
 Write-Host "=================================================="
 Write-Host "auditor+fixer.ps1 v$version" -ForegroundColor Cyan
@@ -510,7 +571,24 @@ if ($Fix) {
 }
 Write-Host "--------------------------------------------------"
 
-$choice = Read-Host "Begin processing? (Y/N)"
+# Determine Start Message
+$startMessage = if ($AvcHigh10Search) { 
+    "Begin AVC High 10 Profile Search?" 
+} elseif ($Fix -and $FixNoBackup) { 
+    "Begin Auditing then Fixing with NO BACKUP?"
+} elseif ($Fix) { 
+    "Begin Auditing then Fixing?" 
+} else { 
+    "Begin Auditing?" 
+}
+
+# Determine Color
+$msgColor = if ($FixNoBackup -and $Fix) { "DarkRed" } else { "Gray" }
+
+# Print message without a newline, then call Read-Host
+Write-Host "$startMessage " -ForegroundColor $msgColor -NoNewline
+$choice = Read-Host "(Y/N)"
+
 if ($choice -notmatch "^[yY]$") {
     Write-Host "Operation cancelled by user." -ForegroundColor DarkYellow
     Pause; exit
