@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: MKVMetadataAuditor+Fixer.ps1
-# VERSION: v2026.05.14_22.23.00
+# VERSION: v2026.05.15_15.48.00
 # TARGET: PowerShell 7.6.1 LTS
 #
 # Copyright (C) 2026 pwsh.Agyjkcrg761
@@ -343,7 +343,7 @@ if (($null -eq $PathParts -or $PathParts.Count -eq 0) -and -not $DelLog) {
 } elseif ($PathParts.Count -gt 0) {
     foreach ($part in ($PathParts | Sort-Object)) { 
         $cleaned = $part.Trim('"')
-        if (Test-Path -LiteralPath $cleaned) { [void]$inputPaths.Add($cleaned) }
+        [void]$inputPaths.Add($cleaned) 
     }
 }
 
@@ -398,7 +398,7 @@ if (-not (Test-Path $excludeFile)) {
       "# ",
       "# Example below this line. Remove the # to enable the line.",
       "#B:\Media\Movies\Sample_Folder",
-      " ") | Out-File $excludeFile -Encoding utf8
+      "") | Out-File $excludeFile -Encoding utf8
 }
 
 $exclusions = @()
@@ -554,7 +554,7 @@ if (Test-Path $configFile) {
 
 # --- STARTUP DISPLAY ---
 Clear-Host
-$version = "2026.05.14_22.23.00"
+$version = "2026.05.15_15.48.00"
 
 # Determine Display Mode, Action, and Override Status
 if ($AvcHigh10Search -or $h10p) {
@@ -598,7 +598,10 @@ if ($excludePaths) {
     Write-Host "--------------------------------------------------"
 }
 Write-Host "Source Folder(s):" -ForegroundColor Green
-foreach ($p in $inputPaths) { Write-Host "  -> $p" -ForegroundColor Blue }
+foreach ($p in $inputPaths) { 
+    if (Test-Path -LiteralPath $p) { Write-Host "  -> $p" -ForegroundColor Blue }
+    else { Write-Host "  [!] NOT FOUND: $p" -ForegroundColor DarkRed }
+}
 
 if ($Fix) {
     Write-Host "Destination Folder(s):" -ForegroundColor Green
@@ -871,11 +874,18 @@ foreach ($folderPath in $targetFolders) {
     if ($mkvFiles.Count -eq 0) { continue }
     
     # --- DYNAMIC PADDING (PER FOLDER) ---
-    $allCodecs = foreach ($f in $mkvFiles) { (& $mkvmerge -J $f.FullName | ConvertFrom-Json).tracks.codec }
-    $codecPadding = [Math]::Max(5, ($allCodecs | Measure-Object -Property Length -Maximum).Maximum)
-    
-    $allTrackNames = foreach ($f in $mkvFiles) { (& $mkvmerge -J $f.FullName | ConvertFrom-Json).tracks.properties.track_name }
-    $namePadding = [Math]::Max(4, ($allTrackNames | Measure-Object -Property Length -Maximum).Maximum)
+    # [FIX] v2026.05.15_15.02.00 - Bypass probes if searching to match Finder speed
+    if (-not $AvcHigh10Search) {
+        $allCodecs = foreach ($f in $mkvFiles) { (& $mkvmerge -J $f.FullName | ConvertFrom-Json).tracks.codec }
+        $codecPadding = [Math]::Max(5, ($allCodecs | Measure-Object -Property Length -Maximum).Maximum)
+        
+        $allTrackNames = foreach ($f in $mkvFiles) { (& $mkvmerge -J $f.FullName | ConvertFrom-Json).tracks.properties.track_name }
+        $namePadding = [Math]::Max(4, ($allTrackNames | Measure-Object -Property Length -Maximum).Maximum)
+    } else {
+        # Defaults to prevent errors in shared logic
+        $codecPadding = 10
+        $namePadding = 20
+    }
     $propPadding = 9
     
     # High10P SCAN (MediaInfo)
