@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: MKVMetadataAuditor+Fixer.ps1
-# VERSION: v2026.05.14_16.35.00
+# VERSION: v2026.05.14_22.23.00
 # TARGET: PowerShell 7.6.1 LTS
 #
 # Copyright (C) 2026 pwsh.Agyjkcrg761
@@ -70,6 +70,10 @@ param (
     # Western Mode Hearing Impaired Subs
     [Alias("hi", "hicc", "cc", "SubtitlesHearingImpaired")]
     [switch]$sdh,
+    
+    # Load the Excluded Paths file
+    [Alias("ep")]
+    [switch]$excludePaths,
     
     #[Parameter(Mandatory=$false)]
     [switch]$Help,
@@ -230,6 +234,10 @@ if ($Help -or $Manual) {
     "      Clears all files within the logs directory (MKVMetadataAuditor+Fixer_logs) before",
     "      starting the operation.`n"  | ForEach-Object { Write-Host $_ -ForegroundColor DarkRed }
     
+    "  -excludePaths | -ep",
+    "      Enables the exclusion engine. When active, the script will skip folders",
+    "      listed in 'MKVMetadataAuditor+Fixer__Excluded-Paths.txt'.`n" | ForEach-Object { Write-Host $_ -ForegroundColor DarkCyan }
+    
 
     Write-Host "`n NOTES:" -ForegroundColor DarkYellow
     "  * SCORING: Automatically penalizes 'Signs/Songs' tracks.",
@@ -272,7 +280,7 @@ if ($sdhActive -and -not $Western) {
 # AVC High 10 Profile Whitelist Validation
 if ($AvcHigh10Search) {
     # Define exactly what IS allowed
-    $allowedH10pFlags = @('AvcHigh10Search', 'AvcHigh10SearchDebug', 'Fast', 'disableRecurse', 'Path', 'h10p', 'h10pDebug', 'PathParts')
+    $allowedH10pFlags = @('AvcHigh10Search', 'AvcHigh10SearchDebug', 'Fast', 'disableRecurse', 'Path', 'h10p', 'h10pDebug', 'PathParts', 'ep', 'excludePaths')
 
     # Check every flag the user actually typed
     foreach ($param in $PSBoundParameters.Keys) {
@@ -379,14 +387,27 @@ $h10pList = New-Object System.Collections.Generic.List[string]
 $h10pCount = 0
 
 # Load Exclusions
-# [CHANGE] v2026.05.14_16.48.00 - MKV-Metadata-Auditor_Excluded-Paths.txt Integration
-$excludeFile = Join-Path $PSScriptRoot "MKVMetadataAuditor+Fixer_Excluded-Paths.txt"
-$exclusions = if (Test-Path $excludeFile) { 
-    Get-Content $excludeFile | Where-Object { -not [string]::IsNullOrWhiteSpace($_) -and -not $_.StartsWith("#") } | ForEach-Object { $_.Trim().TrimEnd('\') }
-} else { @() }
+# [CHANGE] v2026.05.14_18.45.00 - Integration of Excluded Paths (Silent Load)
+$excludeFile = Join-Path $PSScriptRoot "MKVMetadataAuditor+Fixer__Excluded-Paths.txt"
 
-if ($exclusions.Count -gt 0) {
-    Write-Host "[i] Loaded $($exclusions.Count) exclusion rules." -ForegroundColor Yellow
+if (-not (Test-Path $excludeFile)) {
+    @("# FILE: MKVMetadataAuditor+Fixer__Excluded-Paths.txt",
+      "# SCRIPT: MKVMetadataAuditor+Fixer.ps1",
+      "# DESCRIPTION: Add full folder paths here to skip them during audit.",
+      "# FORMAT: One path per line. No wildcards. No trailing slashes.",
+      "# ",
+      "# Example below this line. Remove the # to enable the line.",
+      "#B:\Media\Movies\Sample_Folder",
+      " ") | Out-File $excludeFile -Encoding utf8
+}
+
+$exclusions = @()
+if ($excludePaths) {
+    if (Test-Path $excludeFile) { 
+        $exclusions = Get-Content $excludeFile | ForEach-Object { $_.Trim() } | Where-Object { 
+            -not [string]::IsNullOrWhiteSpace($_) -and -not $_.StartsWith("#") 
+        } | ForEach-Object { $_.TrimEnd('\') }
+    }
 }
 
 # --- CONFIGURATION DEFAULTS ---
@@ -532,8 +553,8 @@ if (Test-Path $configFile) {
 }
 
 # --- STARTUP DISPLAY ---
-#Clear-Host
-$version = "2026.05.14_16.35.00"
+Clear-Host
+$version = "2026.05.14_22.23.00"
 
 # Determine Display Mode, Action, and Override Status
 if ($AvcHigh10Search -or $h10p) {
@@ -570,6 +591,12 @@ Write-Host "  Sub Codecs:   " -NoNewline; Write-Host "$($fixerConfig.Subtitles.C
 Write-Host "--------------------------------------------------"
 #Write-Host "Script Location: " -NoNewline; Write-Host "$PSScriptRoot" -ForegroundColor DarkYellow
 #Write-Host "--------------------------------------------------"
+# [CHANGE] v2026.05.14_19.14.00 - Accurate UI Exclusion Count
+if ($excludePaths) {
+    Write-Host " Exclusions Loaded: " -NoNewline -ForegroundColor Blue
+    Write-Host "$($exclusions.Count)" -ForegroundColor DarkGray
+    Write-Host "--------------------------------------------------"
+}
 Write-Host "Source Folder(s):" -ForegroundColor Green
 foreach ($p in $inputPaths) { Write-Host "  -> $p" -ForegroundColor Blue }
 
@@ -828,10 +855,13 @@ if ($fast) {
 }
 $sessionProgressIndex = 0
 foreach ($folderPath in $targetFolders) {
-    $currentPathClean = $folderPath.FullName.TrimEnd('\')
-    if ($exclusions -contains $currentPathClean) {
-        Write-Host " [SKIP] Folder excluded by rule: $($folderPath.Name)" -ForegroundColor DarkGray
-        continue
+    # [CHANGE] v2026.05.14_18.25.00 - Exclusion Loop Bypass
+    if ($excludePaths -and $exclusions.Count -gt 0) {
+        $currentPathClean = $folderPath.FullName.TrimEnd('\')
+        if ($exclusions -contains $currentPathClean) {
+            Write-Host " [SKIP] Folder excluded by rule: $($folderPath.Name)" -ForegroundColor DarkGray
+            continue
+        }
     }
     Write-Host "Checking: $($folderPath.FullName)..." -ForegroundColor Gray # <--- LIVE FEEDBACK
     $global:GroupMap = @{}
