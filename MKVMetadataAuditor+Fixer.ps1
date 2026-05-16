@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: MKVMetadataAuditor+Fixer.ps1
-# VERSION: 2026.05.16_13.15.00
+# VERSION: 2026.05.16_13.50.00
 # TARGET: PowerShell 7.6.1 LTS
 #
 # Copyright (C) 2026 pwsh.Agyjkcrg761
@@ -585,7 +585,7 @@ if (Test-Path $configFile) {
 
 # --- STARTUP DISPLAY ---
 Clear-Host
-$version = "2026.05.16_13.15.00"
+$version = "2026.05.16_13.50.00"
 
 # Determine Display Mode, Action, and Override Status
 if ($AvcHigh10Search -or $h10p) {
@@ -663,10 +663,11 @@ if ($Fix) {
                     Write-Host -NoNewline "`r     [!] WARNING: Destination folder already exists and will be overwritten!" -ForegroundColor $flashColor
                     #Start-Sleep -Milliseconds 250
                 }
-            }    Write-Host "`r     [!] WARNING: Destination folder already exists and will be overwritten!" -ForegroundColor DarkGray
-        }
-    }
-}
+                Write-Host "`r     [!] WARNING: Destination folder already exists and will be overwritten!" -ForegroundColor DarkGray
+            } # <-- Closes: if (Test-Path...)
+        } # <-- Closes: foreach ($p in $inputPaths)
+    } # <-- Closes: else { ... (the non-FixNoBackup block)
+} # <-- Closes: if ($Fix)
 Write-Host "--------------------------------------------------"
 
 # Determine Start Message
@@ -1351,43 +1352,7 @@ foreach ($folderPath in $targetFolders) {
                             }
                         }
                         
-                        # # 3. SCORING
-                        # $score = 0
-                        # if ($isCodecMatch) { $score += 50 }
                         
-                        # # Priority for Dialogue / Penalty for Signs & Songs
-                        # if ($trackName -match "Dialogue|Full Sub") { $score += 150 }
-                        # if ($trackName -match "Signs|Songs|Lyrics") { $score -= 200 } # Heavy penalty
-                        
-                        # if ($Honorifics -and (($trackName -match "honorifics|honors") -or ($trackLang -eq "enm"))) { $score += 300 }
-                        # if ($trackLang -eq $fixerConfig.Subtitles.PreferredLanguage) { $score += 1 }
-                        
-                        # # Fansub Group Priority Scoring (Anime Mode Only)
-                        # if (-not $Western -and $fixerConfig.Subtitles.FansubGroupPriority -and $fixerConfig.Subtitles.FansubGroupPriority.Count -gt 0 -and $trackName) {
-                            # for ($i = 0; $i -lt $fixerConfig.Subtitles.FansubGroupPriority.Count; $i++) {
-                                # $groupTarget = $fixerConfig.Subtitles.FansubGroupPriority[$i]
-                                # if ($trackName -like "*$groupTarget*") {
-                                    # $score += (10000 - ($i * 1000))
-                                    # break
-                                # }
-                            # }
-                        # }
-                        
-                        # # --- SDH/HI/CC Promotion Scoring ---
-                        # if ($sdh -or $hi -or $hicc -or $cc -or $SubtitlesHearingImpaired) {
-                            # $isSDH = ($trackName -match "SDH|HI|CC" -or $t.properties.flag_hearing_impaired)
-                            # if ($trackLang -eq "eng" -and $isSDH) {
-                                # $score += 500  # Massive boost to ensure SDH is selected as the top candidate
-                            # }
-                        # }
-                        
-                        # # --- Western "Full Sub" Tie-Breaker ---
-                        # if ($Western -and -not $sdhWinner) {
-                            # # If it's English, not forced, and doesn't match signs/songs, it's likely the full sub
-                            # if ($trackLang -eq "eng" -and -not $t.properties.forced_track -and $trackName -notmatch "Signs|Songs|Lyrics") {
-                                # $score += 200 
-                            # }
-                        # }
 
                         # 4. ADD TO LIST (No filter here - we need to see the "bad" tracks to fix them)
                         $subCandidates += [PSCustomObject]@{
