@@ -58,6 +58,7 @@ The script employs a dual-engine approach to process files—handling Anime and 
 | `-sub <string>` | Sets primary subtitle language. Uses weighted scoring for best dialogue track. |
 | `-sc <string>` | Comma-separated list (e.g., 'ass,srt') to dictate subtitle format preference. |
 | `-Hon` | Injects a **+300 score bonus** to tracks labeled 'honorifics' or 'enm'. |
+| `-fg <string>` | Sets preferred fansub groups for subtitle track prioritization (e.g., `-fg 'commie'`). Pass an empty string (`""`) to clear the list via CLI. |
 | `-sdh` | Prioritizes 'Hearing Impaired' or 'SDH' subtitle tracks (Western Mode). |
 
 ### General Utility
