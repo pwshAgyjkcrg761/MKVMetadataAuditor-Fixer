@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: MKVMetadataAuditor+Fixer.ps1
-# VERSION: 2026.05.16_13.50.00
+# VERSION: 2026.05.16_18.10.00
 # TARGET: PowerShell 7.6.1 LTS
 #
 # Copyright (C) 2026 pwsh.Agyjkcrg761
@@ -59,9 +59,15 @@ param (
     [Alias("vid")] [string]$videoLanguage,
     [Alias("vidf")] [switch]$videoForceUpdate,
     [Alias("aud")] [string]$audioLanguagePriority,
+    [Alias('audf')] [Switch]$audioLanguageUpdate,
     [Alias("sub")] [string]$subtitleLanguagePriority,
     [Alias("sc")]  [string]$subtitleCodecPriority,
     [Alias("fg")]  [string]$subtitleFansubGroupPriority,
+    
+    # Clear Defaults - Delete JSON Files
+    [Alias("clr")]  [Switch]$ClearDefaults,
+    [Alias("clrw")] [Switch]$ClearWesternDefaults,
+    [Alias("cla")] [Switch]$ClearAllDefaults,
     
     # New Western Mode Flags
     [Alias("west", "WesternMode", "w")]
@@ -353,7 +359,7 @@ if ($PSVersionTable.PSVersion -lt [version]"7.6.1") {
 $inputPaths = New-Object System.Collections.Generic.List[string]
 
 # Consolidate PathParts check
-if (($null -eq $PathParts -or $PathParts.Count -eq 0) -and -not $DelLog) {
+if (($null -eq $PathParts -or $PathParts.Count -eq 0) -and -not ($DelLog -or $ClearDefaults -or $ClearWesternDefaults -or $ClearAllDefaults)) {
     Write-Host "ERROR: No folder detected. Use the 'Send To' menu or drag a folder onto this script." -ForegroundColor DarkRed
     Pause; exit
 } elseif ($PathParts.Count -gt 0) {
@@ -431,6 +437,25 @@ $configFile = Join-Path $PSScriptRoot "MKVMetadataAuditor+Fixer--FixerDefaults.j
 
 # --- WESTERN PROFILE HANDLER ---
 $westernFile = Join-Path $PSScriptRoot "MKVMetadataAuditor+Fixer--WesternDefaults.json"
+
+# --- CONFIG DELETION ENGINE ---
+if ($ClearDefaults -or $ClearWesternDefaults -or $ClearAllDefaults) {
+    Write-Host ""
+    if ($ClearDefaults -or $ClearAllDefaults) {
+        if (Test-Path -LiteralPath $configFile) { 
+            Remove-Item -LiteralPath $configFile -Force 
+            Write-Host " [✓] Deleted: Anime Defaults ($($configFile | Split-Path -Leaf))" -ForegroundColor Green
+        } else { Write-Host " [!] Anime Defaults file not found." -ForegroundColor DarkGray }
+    }
+    if ($ClearWesternDefaults -or $ClearAllDefaults) {
+        if (Test-Path -LiteralPath $westernFile) { 
+            Remove-Item -LiteralPath $westernFile -Force 
+            Write-Host " [✓] Deleted: Western Defaults ($($westernFile | Split-Path -Leaf))" -ForegroundColor Green
+        } else { Write-Host " [!] Western Defaults file not found." -ForegroundColor DarkGray }
+    }
+    Write-Host " Config cleanup complete. Exiting..." -ForegroundColor Cyan
+    exit
+}
 
 if ($Western) {
     # If Western mode is on but the file is missing, create it from the Anime template
@@ -585,7 +610,7 @@ if (Test-Path $configFile) {
 
 # --- STARTUP DISPLAY ---
 Clear-Host
-$version = "2026.05.16_13.50.00"
+$version = "2026.05.16_18.10.00"
 
 # Determine Display Mode, Action, and Override Status
 if ($AvcHigh10Search -or $h10p) {
@@ -1227,6 +1252,10 @@ foreach ($folderPath in $targetFolders) {
                 # 2. Define videoCount
                 $videoCount = ($currentGroup.Json.tracks | Where-Object { $_.type -eq "video" } | Measure-Object).Count
                 
+                # --- [AUDIO FORCE PRE-CHECK] ---
+                $undAudioCount = ($currentGroup.Json.tracks | Where-Object { $_.type -eq "audio" -and $_.properties.language -eq "und" } | Measure-Object).Count
+                $canForceAudio = ($audioLanguageUpdate -and $undAudioCount -eq 1)
+                
                 # 3. GLOBAL SKIP FOR MULTI-VIDEO FILES
                 if ($videoCount -gt 1) {
                     [void]$fixDetails.Add("FILE: $($fToFix.FullName)")
@@ -1291,6 +1320,17 @@ foreach ($folderPath in $targetFolders) {
                     $targetAudLang = if ($fixerConfig.Audio.PreferredLanguage) { $fixerConfig.Audio.PreferredLanguage } 
                                      elseif ($Western) { "eng" } 
                                      else { "jpn" }
+                                     
+                    # --- AUDIO FORCE LOGIC (-audf) ---
+                    if ($t.type -eq "audio" -and $canForceAudio -and $t.properties.language -eq "und") {
+                        $mkvID = $t.id + 1
+                        $Params += @('--edit', "track:$mkvID", '--set', "language=$targetAudLang", '--set', "flag-default=1")
+                        $needsChange = $true
+                        $bestAudioSel = $sel    # Register this as the "Winner"
+                        $foundPrefAudio = $true # Prevent other tracks from being picked
+                        [void]$fixDetails.Add("  ACTION: SET_LANG=$targetAudLang | SET_DEFAULT=1 | TRACK: $mkvID | REASON: Audio Force (-audf)")
+                        continue # Skip standard audio checks and Global Reset for this track
+                    }                 
                     
                     if ($t.type -eq "audio" -and -not $foundPrefAudio -and $t.properties.language -eq $targetAudLang) {
                         if (-not ($fixerConfig.Audio.IgnoreCommentary -and ($t.properties.track_name -match "Commentary|Interview"))) {
