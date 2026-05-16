@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: MKVMetadataAuditor+Fixer.ps1
-# VERSION: v2026.05.15_15.48.00
+# VERSION: 2026.05.16_13.15.00
 # TARGET: PowerShell 7.6.1 LTS
 #
 # Copyright (C) 2026 pwsh.Agyjkcrg761
@@ -22,8 +22,7 @@
 # 3. SCRIPT OUTPUT:
 #    - When printing the script only print snippets unless asked for entire script.
 #    - Always use a codebox with a copy button.
-# 4. When the user asks for a changelog always print it in a codebox with a copy button.
-# 5. VERBATIM ANCHOR PROTOCOL:
+# 4. VERBATIM ANCHOR PROTOCOL:
 #    - To facilitate "Find" in Notepad++, always provide "Verbatim Anchors."
 #    - "Verbatim Anchors" are the exact lines of existing code immediately BEFORE and AFTER the insertion point.
 #    - Do not summarize, truncate, or refactor the existing code used as an anchor.
@@ -43,14 +42,16 @@ param (
     [Alias("nr")]
     [switch]$disableRecurse, # New flag to disable sub-directory scanning
     [switch]$DelLog,         # New flag to clear the logs folder
-    [Alias("Honorifics")]
-    [switch]$Hon,          # New switch for Honorifics mode
+    [Alias("Hon")]
+    [switch]$Honorifics,          # New switch for Honorifics mode
     [Alias("ovrd")]
     [switch]$overrideDefaults,
     
     [Alias("h10p")]
     [switch]$AvcHigh10Search,
+    
     [switch]$fast,
+    
     [alias("h10pDebug")]
     [switch]$AvcHigh10SearchDebug,
     
@@ -60,6 +61,7 @@ param (
     [Alias("aud")] [string]$audioLanguagePriority,
     [Alias("sub")] [string]$subtitleLanguagePriority,
     [Alias("sc")]  [string]$subtitleCodecPriority,
+    [Alias("fg")]  [string]$subtitleFansubGroupPriority,
     
     # New Western Mode Flags
     [Alias("west", "WesternMode", "w")]
@@ -68,8 +70,8 @@ param (
     [Switch]$OverrideWesternDefaults,
     
     # Western Mode Hearing Impaired Subs
-    [Alias("hi", "hicc", "cc", "SubtitlesHearingImpaired")]
-    [switch]$sdh,
+    [Alias("sdh", "hi", "hicc", "cc")]
+    [switch]$SubtitlesHearingImpaired,
     
     # Load the Excluded Paths file
     [Alias("ep")]
@@ -167,7 +169,7 @@ if ($Help -or $Manual) {
     
     Write-Host "`n MODE FLAGS:`n" -ForegroundColor DarkYellow
 
-    "  -Western | -w | west | WesternMode",
+    "  -Western | -w | -west | -WesternMode",
     "      Sets defaults for Western media (English audio/subs).`n" | ForEach-Object { Write-Host $_ -ForegroundColor DarkCyan }
 
     "  -AvcHigh10Search | -h10p",
@@ -210,25 +212,30 @@ if ($Help -or $Manual) {
     "      A comma-separated list (e.g., 'ass,srt') that dictates which",
     "      subtitle formats to prefer when multiple tracks are available.`n"  | ForEach-Object { Write-Host $_ -ForegroundColor DarkMagenta }
     
-    "  -Hon | -Honorifics",
+    "  -Honorifics | -Hon",
     "      Injects a +300 score bonus to tracks labeled with 'honorifics'",
     "      or 'enm', ensuring they are selected over standard dialogue.`n"  | ForEach-Object { Write-Host $_ -ForegroundColor DarkCyan }
     
+    "  -FansubGroupPriority | -fg <string>",
+    "      Sets preferred fansub groups for subtitle track prioritization",
+    "      (e.g., -fg 'commie'). Pass an empty string ("") to clear the",
+    "      list and reset preferences via command line.`n" | ForEach-Object { Write-Host $_ -ForegroundColor DarkMagenta }
+    
     Write-Host "`n WESTERN SPECIFIC:`n" -ForegroundColor DarkYellow
 
-    "  -sdh | -hi | -hicc | -cc | -SubtitlesHearingImpaired",
+    "  -SubtitlesHearingImpaired | -sdh | -hi | -hicc | -cc",
     "      Forces the script to prioritize 'Hearing Impaired' or 'SDH'",
-    "      subtitle tracks for Western media.`n"  | ForEach-Object { Write-Host $_ -ForegroundColor DarkMagenta }
+    "      subtitle tracks for Western media.`n"  | ForEach-Object { Write-Host $_ -ForegroundColor DarkCyan }
     
     "  -OverrideWesternDefaults | -ovrdw",
     "      Allows the script to save custom Western mode parameters to",
-    "      the JSON configuration.`n"  | ForEach-Object { Write-Host $_ -ForegroundColor DarkCyan }
+    "      the JSON configuration.`n"  | ForEach-Object { Write-Host $_ -ForegroundColor DarkMagenta }
 
     Write-Host "`n GENERAL:`n" -ForegroundColor DarkYellow
     
     "  -help | -manual",
     "      Displays this manual for MKVMetadataAuditor+Fixer.ps1. The one you are",
-    "      reading right now.`n"  | ForEach-Object { Write-Host $_ -ForegroundColor DarkMagenta }
+    "      reading right now.`n"  | ForEach-Object { Write-Host $_ -ForegroundColor DarkCyan }
     
     "  -DelLog",
     "      Clears all files within the logs directory (MKVMetadataAuditor+Fixer_logs) before",
@@ -268,11 +275,20 @@ if (($FixNoBackup -or $FixDebug) -and -not $Fix) {
 }
 
 # --- FLAG VALIDATION ---
-$sdhActive = ($sdh -or $hi -or $hicc -or $cc -or $SubtitlesHearingImpaired)
-if ($sdhActive -and -not $Western) {
+if ($SubtitlesHearingImpaired -and -not $Western) {
     Write-Host ""
     Write-Host " [!] ERROR: SDH/HI/CC flags are only supported in -Western mode." -ForegroundColor DarkRed
-    Write-Host " Please add -Western to your command or remove the SDH flags." -ForegroundColor DarkYellow
+    Write-Host " Please add one of the following to your command or remove the SDH flags." -ForegroundColor DarkYellow
+    Write-Host " -Western | -w | -west | -WesternMode" -ForegroundColor DarkGreen
+    Write-Host ""
+    exit
+}
+
+if ($OverrideWesternDefaults -and -not $Western) {
+    Write-Host ""
+    Write-Host " [!] ERROR: -OverrideWesternDefaults is only supported in -Western mode." -ForegroundColor DarkRed
+    Write-Host " Please add one of the following to your command." -ForegroundColor DarkYellow
+    Write-Host " -Western | -w | -west | -WesternMode" -ForegroundColor DarkGreen
     Write-Host ""
     exit
 }
@@ -455,14 +471,19 @@ if ($Western -and $OverrideWesternDefaults -and ($null -ne $fixerConfig)) {
 }
 
 # Base hardcoded defaults
-$defaultSettings = @{
+$defaultSettings = [ordered]@{
     Audio = @{ PreferredLanguage = "jpn"; SetDefault = $true; IgnoreCommentary = $true }
-    Subtitles = @{ 
+    Subtitles = [ordered]@{ 
         PreferredLanguage = "eng"; SetDefault = $true; 
         CodecPriority = @("S_TEXT/ASS", "S_TEXT/SSA", "S_TEXT/UTF8", "S_SRT", "S_HDMV/PGS", "S_VOBSUB")
         IgnoreNames = "Signs|Songs|SDH|HI/CC|CC"
+        FansubGroupPriority = @()
+        
+        "__COMMENT__FansubGroups_Classic_Heavy_Styling_And_Typesetting" = @("Commie", "UTW", "FFF", "gg", "Mazui", "Eclipse", "Ayako", "Static-Subs", "Central Anime", "Live-ev evil")
+        "__COMMENT__FansubGroups_Modern_And_Active_Release_Groups"      = @("SubsPlease", "Erai-raws", "HorribleSubs", "DameDesuYo", "Asenshi", "Pas", "GJM", "Tsundere", "Chihiro", "MSubs", "Seto Otaku")
+        "__COMMENT__FansubGroups_BDRip_Archival_And_Remux_Groups"       = @("Coalgirls", "Thora", "Kametsu", "Underwater", "SallySubs", "Yousei-raws", "DeadNews", "Beatrice-Raws", "ReinForce", "Moozzi2", "Doki")
     }
-    Global = @{ ResetAllFlags = $true; RenameSDHtoCC = $true; FixMislabeledEng = $true }
+    Global = @{ ResetAllFlags = $true; RenameSDHtoCC = $true; FixMislabeledEng = $true; SDH = $false; HI = $false; HICC = $false; CC = $false }
 }
 
 # 1. MAPPING DICTIONARIES
@@ -509,12 +530,19 @@ if ($subtitleCodecPriority) {
     $defaultSettings.Subtitles.CodecPriority = @($translated)
 }
 
+# Fansub Group Priority Array Translation
+if ($subtitleFansubGroupPriority) {
+    $rawGroups = $subtitleFansubGroupPriority.Split(',').Trim()
+    $defaultSettings.Subtitles.FansubGroupPriority = @($rawGroups)
+}
+
 # 2.5 VALIDATION: Require the appropriate override switch for parameter usage
 $usedFlags = @()
 if ($PSBoundParameters.ContainsKey('videoLanguage')) { $usedFlags += "-vid" }
 if ($PSBoundParameters.ContainsKey('audioLanguage')) { $usedFlags += "-aud" }
 if ($PSBoundParameters.ContainsKey('subLanguage'))   { $usedFlags += "-sub" }
 if ($PSBoundParameters.ContainsKey('subCodec'))     { $usedFlags += "-sc" }
+if ($PSBoundParameters.ContainsKey('subtitleFansubGroupPriority')) { $usedFlags += "-fg" }
 
 # Determine which override switch is required based on the mode
 $isMissingOverride = if ($Western) { 
@@ -538,6 +566,9 @@ if ($isMissingOverride) {
 # 3. SAVE / LOAD LOGIC
 $configSource = "Built-in Defaults"
 if ($overrideDefaults) {
+    if ($PSBoundParameters.ContainsKey('subtitleFansubGroupPriority')) {
+        $defaultSettings.Subtitles.FansubGroupPriority = @($subtitleFansubGroupPriority.Split(',').Trim())
+    }
     $defaultSettings | ConvertTo-Json -Depth 10 | Out-File $configFile -Encoding utf8
     $configSource = "Updated & Saved to JSON"
 }
@@ -554,7 +585,7 @@ if (Test-Path $configFile) {
 
 # --- STARTUP DISPLAY ---
 Clear-Host
-$version = "2026.05.15_15.48.00"
+$version = "2026.05.16_13.15.00"
 
 # Determine Display Mode, Action, and Override Status
 if ($AvcHigh10Search -or $h10p) {
@@ -563,7 +594,7 @@ if ($AvcHigh10Search -or $h10p) {
     $displayMode = "AVC High 10 Search Mode$fastStatus$recurseStatus"
 } else {
     $modeBase = if ($Western) { "Western Mode" } else { "Anime Mode (default)" }
-    $sdhStatus = if ($sdh -or $hi -or $hicc -or $cc -or $SubtitlesHearingImpaired) { " SDH" } else { "" }
+    $sdhStatus = if ($SubtitlesHearingImpaired) { " SDH" } else { "" }
     $action = if ($Fix) { "Audit & Fix" } else { "Audit" }
     $recurseStatus = if ($disableRecurse) { " [No-Recurse]" } else { "" }
     $nobackupStatus = if ($FixNoBackup) { " NO BACKUP!" } else { "" }
@@ -588,6 +619,12 @@ Write-Host "  Video Target: " -NoNewline; Write-Host "$($fixerConfig.Video.Targe
 Write-Host "  Audio Target: " -NoNewline; Write-Host "$($fixerConfig.Audio.PreferredLanguage)" -ForegroundColor DarkMagenta
 Write-Host "  Sub Target:   " -NoNewline; Write-Host "$($fixerConfig.Subtitles.PreferredLanguage)" -ForegroundColor Blue
 Write-Host "  Sub Codecs:   " -NoNewline; Write-Host "$($fixerConfig.Subtitles.CodecPriority -join ', ')" -ForegroundColor DarkMagenta
+if ($Honorifics) {
+    Write-Host "  Honorifics:   " -NoNewline; Write-Host "$(if ($Honorifics) { "On" } else { "Off" })" -ForegroundColor Blue
+}
+if ($fixerConfig.Subtitles.FansubGroupPriority -and $fixerConfig.Subtitles.FansubGroupPriority.Count -gt 0) {
+    Write-Host "  Fansub Pref:  " -NoNewline; Write-Host "$($fixerConfig.Subtitles.FansubGroupPriority -join ', ')" -ForegroundColor Cyan
+}
 Write-Host "--------------------------------------------------"
 #Write-Host "Script Location: " -NoNewline; Write-Host "$PSScriptRoot" -ForegroundColor DarkYellow
 #Write-Host "--------------------------------------------------"
@@ -617,7 +654,16 @@ if ($Fix) {
     } else {
         foreach ($p in $inputPaths) { 
             $destPath = $p.TrimEnd('\') + "_updated"
-            Write-Host "  -> $destPath" -ForegroundColor Blue 
+            Write-Host "  -> $destPath" -ForegroundColor Blue
+            
+            # Warn if the updated directory already exists
+            if (Test-Path -LiteralPath $destPath) {
+                for ($i = 0; $i -lt 4; $i++) {
+                    $flashColor = if ($i % 2 -eq 0) { "DarkRed" } else { "DarkYellow" }
+                    Write-Host -NoNewline "`r     [!] WARNING: Destination folder already exists and will be overwritten!" -ForegroundColor $flashColor
+                    #Start-Sleep -Milliseconds 250
+                }
+            }    Write-Host "`r     [!] WARNING: Destination folder already exists and will be overwritten!" -ForegroundColor DarkGray
         }
     }
 }
@@ -751,7 +797,7 @@ function Get-AuditFlags($tracks, $IsWestern) {
         }
 
         # 2. Preference Audit: If SDH flags are used, check if we can "upgrade" to SDH
-        if ($sdh -or $hi -or $hicc -or $cc -or $SubtitlesHearingImpaired) {
+        if ($SubtitlesHearingImpaired) {
             if ($hasEngSDH) {
                 $isSDHDefault = $hasEngSDH | Where-Object { $_.properties.default_track }
                 if (-not $isSDHDefault) {
@@ -1239,7 +1285,11 @@ foreach ($folderPath in $targetFolders) {
                     }
 
                     # --- AUDIO/SUB TARGETING ---
-                    $targetAudLang = if ($Western) { "eng" } else { $fixerConfig.Audio.PreferredLanguage }
+                    # $targetAudLang = if ($Western) { "eng" } else { $fixerConfig.Audio.PreferredLanguage }
+                    
+                    $targetAudLang = if ($fixerConfig.Audio.PreferredLanguage) { $fixerConfig.Audio.PreferredLanguage } 
+                                     elseif ($Western) { "eng" } 
+                                     else { "jpn" }
                     
                     if ($t.type -eq "audio" -and -not $foundPrefAudio -and $t.properties.language -eq $targetAudLang) {
                         if (-not ($fixerConfig.Audio.IgnoreCommentary -and ($t.properties.track_name -match "Commentary|Interview"))) {
@@ -1260,7 +1310,7 @@ foreach ($folderPath in $targetFolders) {
                         foreach ($c in $fixerConfig.Subtitles.CodecPriority) {
                             if ($t.codec -match $c) { $isCodecMatch = $true; break }
                         }
-
+                        
                         # 3. SCORING
                         $score = 0
                         if ($isCodecMatch) { $score += 50 }
@@ -1269,11 +1319,24 @@ foreach ($folderPath in $targetFolders) {
                         if ($trackName -match "Dialogue|Full Sub") { $score += 150 }
                         if ($trackName -match "Signs|Songs|Lyrics") { $score -= 200 } # Heavy penalty
                         
-                        if ($Hon -and (($trackName -match "honorifics|honors") -or ($trackLang -eq "enm"))) { $score += 300 }
+                        if ($Honorifics -and (($trackName -match "honorifics|honors") -or ($trackLang -eq "enm"))) { $score += 300 }
+                        
+                        # Dynamically match the configuration preference
                         if ($trackLang -eq $fixerConfig.Subtitles.PreferredLanguage) { $score += 1 }
                         
+                        # Fansub Group Priority Scoring (Anime Mode Only)
+                        if (-not $Western -and $fixerConfig.Subtitles.FansubGroupPriority -and $fixerConfig.Subtitles.FansubGroupPriority.Count -gt 0 -and $trackName) {
+                            for ($i = 0; $i -lt $fixerConfig.Subtitles.FansubGroupPriority.Count; $i++) {
+                                $groupTarget = $fixerConfig.Subtitles.FansubGroupPriority[$i]
+                                if ($trackName -like "*$groupTarget*") {
+                                    $score += (10000 - ($i * 1000))
+                                    break
+                                }
+                            }
+                        }
+                        
                         # --- SDH/HI/CC Promotion Scoring ---
-                        if ($sdh -or $hi -or $hicc -or $cc -or $SubtitlesHearingImpaired) {
+                        if ($SubtitlesHearingImpaired) {
                             $isSDH = ($trackName -match "SDH|HI|CC" -or $t.properties.flag_hearing_impaired)
                             if ($trackLang -eq "eng" -and $isSDH) {
                                 $score += 500  # Massive boost to ensure SDH is selected as the top candidate
@@ -1282,11 +1345,49 @@ foreach ($folderPath in $targetFolders) {
                         
                         # --- Western "Full Sub" Tie-Breaker ---
                         if ($Western -and -not $sdhWinner) {
-                            # If it's English, not forced, and doesn't match signs/songs, it's likely the full sub
-                            if ($trackLang -eq "eng" -and -not $t.properties.forced_track -and $trackName -notmatch "Signs|Songs|Lyrics") {
+                            # Dynamically verify against the profile language preference instead of hardcoded 'eng'
+                            if ($trackLang -eq $fixerConfig.Subtitles.PreferredLanguage -and -not $t.properties.forced_track -and $trackName -notmatch "Signs|Songs|Lyrics") {
                                 $score += 200 
                             }
                         }
+                        
+                        # # 3. SCORING
+                        # $score = 0
+                        # if ($isCodecMatch) { $score += 50 }
+                        
+                        # # Priority for Dialogue / Penalty for Signs & Songs
+                        # if ($trackName -match "Dialogue|Full Sub") { $score += 150 }
+                        # if ($trackName -match "Signs|Songs|Lyrics") { $score -= 200 } # Heavy penalty
+                        
+                        # if ($Honorifics -and (($trackName -match "honorifics|honors") -or ($trackLang -eq "enm"))) { $score += 300 }
+                        # if ($trackLang -eq $fixerConfig.Subtitles.PreferredLanguage) { $score += 1 }
+                        
+                        # # Fansub Group Priority Scoring (Anime Mode Only)
+                        # if (-not $Western -and $fixerConfig.Subtitles.FansubGroupPriority -and $fixerConfig.Subtitles.FansubGroupPriority.Count -gt 0 -and $trackName) {
+                            # for ($i = 0; $i -lt $fixerConfig.Subtitles.FansubGroupPriority.Count; $i++) {
+                                # $groupTarget = $fixerConfig.Subtitles.FansubGroupPriority[$i]
+                                # if ($trackName -like "*$groupTarget*") {
+                                    # $score += (10000 - ($i * 1000))
+                                    # break
+                                # }
+                            # }
+                        # }
+                        
+                        # # --- SDH/HI/CC Promotion Scoring ---
+                        # if ($sdh -or $hi -or $hicc -or $cc -or $SubtitlesHearingImpaired) {
+                            # $isSDH = ($trackName -match "SDH|HI|CC" -or $t.properties.flag_hearing_impaired)
+                            # if ($trackLang -eq "eng" -and $isSDH) {
+                                # $score += 500  # Massive boost to ensure SDH is selected as the top candidate
+                            # }
+                        # }
+                        
+                        # # --- Western "Full Sub" Tie-Breaker ---
+                        # if ($Western -and -not $sdhWinner) {
+                            # # If it's English, not forced, and doesn't match signs/songs, it's likely the full sub
+                            # if ($trackLang -eq "eng" -and -not $t.properties.forced_track -and $trackName -notmatch "Signs|Songs|Lyrics") {
+                                # $score += 200 
+                            # }
+                        # }
 
                         # 4. ADD TO LIST (No filter here - we need to see the "bad" tracks to fix them)
                         $subCandidates += [PSCustomObject]@{
@@ -1325,7 +1426,7 @@ foreach ($folderPath in $targetFolders) {
                 if ($subCandidates.Count -gt 0) {
                         # If Western mode is on AND you haven't specified a language preference in the JSON
                     if ($Western -and [string]::IsNullOrWhiteSpace($fixerConfig.Subtitles.PreferredLanguage)) {
-                        $sdhRequested = ($sdh -or $hi -or $hicc -or $cc -or $SubtitlesHearingImpaired)
+                        $sdhRequested = ($SubtitlesHearingImpaired)
                         $sdhWinner = $subCandidates | Sort-Object Score -Descending | Select-Object -First 1
 
                         # Only promote if SDH was requested AND the winner actually is an SDH track
@@ -1369,8 +1470,11 @@ foreach ($folderPath in $targetFolders) {
                     } else {
                         # ANIME MODE: Existing Scoring Logic
                     $winner = $subCandidates | Sort-Object Score -Descending | Select-Object -First 1
-                    $targetSubLang = "eng" 
-                    $subReason = if ($Hon -and ($winner.Score -ge 100)) { "Preferred Honorifics ($($winner.Lang))" } else { "Primary ENG Sub" }
+                    $targetSubLang = if ($fixerConfig.Subtitles.PreferredLanguage) { $fixerConfig.Subtitles.PreferredLanguage } 
+                                     elseif ($Western) { "eng" } 
+                                     else { "eng" }
+                    # $targetSubLang = "eng" 
+                    $subReason = if ($Honorifics -and ($winner.Score -ge 100)) { "Preferred Honorifics ($($winner.Lang))" } else { "Primary ENG Sub" }
                     
                     $currentWinnerData = $currentGroup.Json.tracks | Where-Object { $_.id -eq $winner.ID }
                     
