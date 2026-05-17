@@ -24,8 +24,8 @@ The script employs a dual-engine approach to process files—handling Anime and 
 # Direct Fix (No Backup) with Codec Priority
 .\MKVMetadataAuditor+Fixer.ps1 -Fix -FixNoBackup -sc 'ass,srt' -ovrd -Path 'G:\Media\Anime'
 
-# AVC High 10 Search Mode (Fast & No-Recurse)
-.\MKVMetadataAuditor+Fixer.ps1 -h10p -fast -nr -Path 'G:\Media\Anime'
+# AVC High 10 Deep Scan Library Sweep (Fast Mode)
+.\MKVMetadataAuditor+Fixer.ps1 -h10p -fast -Path 'G:\Media\Anime'
 ```
 ---
 
@@ -38,35 +38,40 @@ The script employs a dual-engine approach to process files—handling Anime and 
 | `-Fix` | Enables **Write Mode**. Without this, the script runs in read-only audit mode. |
 | `-FixDebug` | Prints the exact `mkvpropedit` command strings before execution. |
 | `-FixNoBackup` | Overwrites metadata directly on source files (disables `_updated` folder). |
-| `-ovrd` | **Mandatory** when using automation flags to save parameters to the JSON config. |
+| `-overrideDefaults | -ovrd` | **Mandatory** when using automation flags to save parameters to the JSON config. |
 
 ### Mode & Search Flags
 | Flag | Description |
 | :--- | :--- |
-| `-Western` | Sets defaults for Western media (English audio/subs). |
-| `-h10p` | **Search Mode:** Scans specifically for AVC High 10 (10-bit) video streams. |
-| `-h10pDebug` | Enables verbose terminal output during the High 10 search. |
+| `-Western | -w | -west | -WesternMode` | Sets defaults for Western media (English audio/subs). |
+| `-AvcHigh10Search | -h10p` | **Search Mode:** Scans specifically for AVC High 10 (10-bit) video streams. |
+| `-AvcHigh10SearchDebug | -h10pDebug` | Enables verbose terminal output during the High 10 search. |
 | `-fast` | Speeds up the High 10 search by skipping extended metadata checks. |
-| `-nr` | **No-Recurse:** Disables subfolder scanning; only processes the root path. |
+| `-disableRecurse | -nr` | **No-Recurse:** Disables subfolder scanning; only processes the root path. |
 
 ### Track Priorities & Automation
 | Flag | Description |
 | :--- | :--- |
-| `-vid <string>` | Targets the video track language (3-letter ISO code). |
-| `-vidf` | **Safety Toggle:** Confirms video language changes on files that otherwise pass audit. |
-| `-aud <string>` | Sets primary audio language (e.g., 'jpn') and sets it as 'Default'. |
-| `-sub <string>` | Sets primary subtitle language. Uses weighted scoring for best dialogue track. |
-| `-sc <string>` | Comma-separated list (e.g., 'ass,srt') to dictate subtitle format preference. |
-| `-Hon` | Injects a **+300 score bonus** to tracks labeled 'honorifics' or 'enm'. |
-| `-fg <string>` | Sets preferred fansub groups for subtitle track prioritization (e.g., `-fg 'commie'`). Pass an empty string (`""`) to clear the list via CLI. |
-| `-sdh` | Prioritizes 'Hearing Impaired' or 'SDH' subtitle tracks (Western Mode). |
+| `-videoLanguage | -vid <string>` | Targets the video track language (3-letter ISO code). |
+| `-videoForceUpdate | -vidf` | **Safety Toggle:** Confirms video language changes on files that otherwise pass audit. |
+| `-audioLanguagePriority | -aud <string>` | Sets primary audio language (e.g., 'jpn') and sets it as 'Default'. |
+| `-subtitleLanguagePriority | -sub <string>` | Sets primary subtitle language. Uses weighted scoring for best dialogue track. |
+| `-subtitleCodecPriority | -sc <string>` | Comma-separated list (e.g., 'ass,srt') to dictate subtitle format preference. |
+| `-Honorifics | -Hon` | Injects a **+300 score bonus** to tracks labeled 'honorifics' or 'enm'. |
+| `-FansubGroupPriority | -fg <string>` | Sets preferred fansub groups for subtitle track prioritization (e.g., `-fg 'commie'`). Pass an empty string (`""`) to clear preferences via CLI. |
+| `-SubtitlesHearingImpaired | -sdh | -hi | -hicc | -cc` | Prioritizes 'Hearing Impaired' or 'SDH' subtitle tracks (Western Mode). |
+| `-OverrideWesternDefaults | -ovrdw` | Allows the script to save custom Western mode parameters to the JSON configuration. |
 
-### General Utility
+### Advanced & Log Management Flags
 | Flag | Description |
 | :--- | :--- |
-| `-ep` | Enables the exclusion engine (`MKVMetadataAuditor+Fixer__Excluded-Paths.txt`). |
-| `-DelLog` | Clears the logs directory before starting the operation. |
-| `-manual` | Displays the internal help manual. |
+| `-VerifyUpdates | -V | -Verify` | Chains an automated second-pass verification audit immediately after fixing to confirm metadata integrity. Requires `-Fix`. |
+| `-help | -manual` | Displays the internal help manual. |
+| `-DelLog` | Clears all historically accumulated files within the logs directory before starting operations. |
+| `-ClearDefaults | -clr` | Deletes the saved Anime configuration JSON template to reset rules back to factory conditions. |
+| `-ClearWesternDefaults | -clrw` | Deletes the custom Western configuration file to purge specialized rules. |
+| `-ClearAllDefaults | -cla` | Total system purge of both Anime and Western configuration JSON structures. |
+| `-excludePaths | -ep` | Enables the directory suppression exclusion engine (`MKVMetadataAuditor+Fixer__Excluded-Paths.txt`). |
 
 ---
 
