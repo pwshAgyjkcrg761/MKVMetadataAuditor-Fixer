@@ -54,6 +54,7 @@ The script employs a dual-engine approach to process files—handling Anime and 
 | :--- | :--- |
 | `-videoLanguage \| -vid <string>` | Targets the video track language (3-letter ISO code). |
 | `-videoForceUpdate \| -vidf` | **Safety Toggle:** Confirms video language changes on files that otherwise pass audit. |
+| `-audioLanguageUpdate \| -audf` | **Safety Toggle:** Confirms audio language changes on files that otherwise pass audit. |
 | `-audioLanguagePriority \| -aud <string>` | Sets primary audio language (e.g., 'jpn') and sets it as 'Default'. |
 | `-subtitleLanguagePriority \| -sub <string>` | Sets primary subtitle language. Uses weighted scoring for best dialogue track. |
 | `-subtitleCodecPriority \| -sc <string>` | Comma-separated list (e.g., 'ass,srt') to dictate subtitle format preference. |
