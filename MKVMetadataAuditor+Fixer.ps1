@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: MKVMetadataAuditor+Fixer.ps1
-# VERSION: 2026.05.16_18.10.00
+# VERSION: 2026.05.17_09.16.00
 # TARGET: PowerShell 7.6.1 LTS
 #
 # Copyright (C) 2026 pwsh.Agyjkcrg761
@@ -82,6 +82,9 @@ param (
     # Load the Excluded Paths file
     [Alias("ep")]
     [switch]$excludePaths,
+    
+    [Alias("V", "Verify")]
+    [switch]$VerifyUpdates,
     
     #[Parameter(Mandatory=$false)]
     [switch]$Help,
@@ -302,7 +305,7 @@ if ($OverrideWesternDefaults -and -not $Western) {
 # AVC High 10 Profile Whitelist Validation
 if ($AvcHigh10Search) {
     # Define exactly what IS allowed
-    $allowedH10pFlags = @('AvcHigh10Search', 'AvcHigh10SearchDebug', 'Fast', 'disableRecurse', 'Path', 'h10p', 'h10pDebug', 'PathParts', 'ep', 'excludePaths')
+    $allowedH10pFlags = @('AvcHigh10Search', 'AvcHigh10SearchDebug', 'Fast', 'disableRecurse', 'Path', 'h10p', 'h10pDebug', 'PathParts', 'ep', 'excludePaths', 'VerifyUpdates', 'V', 'Verify')
 
     # Check every flag the user actually typed
     foreach ($param in $PSBoundParameters.Keys) {
@@ -389,6 +392,7 @@ $pLogDir = Join-Path $rootLog "Path_Logs"; $dLogDir = Join-Path $rootLog "Detail
 $mLogDir = Join-Path $rootLog "Mismatch_Logs"; $cLogDir = Join-Path $rootLog "Comparison_Logs"
 $fLogDir = Join-Path $rootLog "FIX_QUEUE"
 $h10pLogDir = Join-Path $rootLog "AVC_High_10_Profile_Logs"
+$vLogDir = Join-Path $rootLog "Updates_Verification_Logs"
 
 # Define the timestamp once for all logs
 $ts = Get-Date -Format "yyyy-MM-dd_HH-mm-ss"
@@ -405,6 +409,8 @@ $missLog = Join-Path $mLogDir "MKVMetadataAuditor+Fixer_Mismatches_$($ts)-log.tx
 $compLog = Join-Path $cLogDir "MKVMetadataAuditor+Fixer_Comparison_$($ts)-log.txt"
 $fixerLog = Join-Path $fLogDir "MKVMetadataAuditor+Fixer_FIX_QUEUE_$($ts)-log.txt"
 $h10pLog = Join-Path $h10pLogDir "MKVMetadataAuditor+Fixer_AVC_High_10_$($ts)-log.txt"
+$verifyLog = Join-Path $vLogDir "MKVMetadataAuditor+Fixer_Updates_Verification_$($ts)-log.txt"
+
 $h10pList = New-Object System.Collections.Generic.List[string]
 $h10pCount = 0
 
@@ -610,7 +616,7 @@ if (Test-Path $configFile) {
 
 # --- STARTUP DISPLAY ---
 Clear-Host
-$version = "2026.05.16_18.10.00"
+$version = "2026.05.17_09.16.00"
 
 # Determine Display Mode, Action, and Override Status
 if ($AvcHigh10Search -or $h10p) {
@@ -625,7 +631,8 @@ if ($AvcHigh10Search -or $h10p) {
     $nobackupStatus = if ($FixNoBackup) { " NO BACKUP!" } else { "" }
     $debugStatus = if ($FixDebug) { " Debug" } else { "" }
     $ovrdStatus = if ($overrideDefaults -or $OverrideWesternDefaults) { " override defaults" } else { "" }
-    $displayMode = "$modeBase $action$nobackupStatus$debugStatus$ovrdStatus$sdhStatus$recurseStatus"
+    $verifyStatus = if ($VerifyUpdates) { " + Verification" } else { "" }
+    $displayMode = "$modeBase $action$nobackupStatus$debugStatus$ovrdStatus$sdhStatus$recurseStatus$verifyStatus"
 }
 
 Write-Host "=================================================="
@@ -693,6 +700,18 @@ if ($Fix) {
         } # <-- Closes: foreach ($p in $inputPaths)
     } # <-- Closes: else { ... (the non-FixNoBackup block)
 } # <-- Closes: if ($Fix)
+
+if ($VerifyUpdates) {
+    Write-Host "Verification Mode:" -ForegroundColor Green
+    if ($Fix -and -not $FixNoBackup) {
+        foreach ($p in $inputPaths) {
+            $verifyDest = $p.TrimEnd('\') + "_updated"
+            Write-Host "  -> Post-Fix Audit Target: $verifyDest" -ForegroundColor Cyan
+        }
+    } else {
+        Write-Host "  -> Post-Fix Audit Target: [Source Folders Directly]" -ForegroundColor Cyan
+    }
+}
 Write-Host "--------------------------------------------------"
 
 # Determine Start Message
@@ -1593,6 +1612,133 @@ if ($logBuffer.Count -gt 0) {
     $logBuffer | Out-File -FilePath $h10pLog -Append -Encoding utf8
     $logBuffer.Clear()
 }
+
+if ($VerifyUpdates) {
+    Write-Host "`n==================================================" -ForegroundColor Cyan
+    Write-Host " RUNNING UPDATES VERIFICATION AUDIT..." -ForegroundColor Cyan
+    Write-Host "==================================================" -ForegroundColor Cyan
+    
+    # 1. Target Directory Identification
+    $verifyPaths = New-Object System.Collections.Generic.List[string]
+    if ($Fix -and -not $FixNoBackup) {
+        foreach ($p in $inputPaths) {
+            $targetUpdatePath = $p.TrimEnd('\') + "_updated"
+            if (Test-Path -LiteralPath $targetUpdatePath) { [void]$verifyPaths.Add($targetUpdatePath) }
+        }
+    } else {
+        foreach ($p in $inputPaths) { [void]$verifyPaths.Add($p) }
+    }
+    
+    if ($verifyPaths.Count -gt 0) {
+        Write-Host " Saving Verification Details to:" -ForegroundColor Gray
+        Write-Host "   $verifyLog`n" -ForegroundColor DarkGray
+        
+        # 2. Gather Folders
+        $verifyFolders = if ($disableRecurse) {
+            $verifyPaths | ForEach-Object { Get-Item -LiteralPath $_ }
+        } else {
+            Get-ChildItem -LiteralPath $verifyPaths -Directory -Recurse | Sort-Object FullName
+        }
+        $verifyFolders = @($verifyPaths | ForEach-Object { Get-Item -LiteralPath $_ }) + $verifyFolders | Select-Object -Unique
+
+        # 3. Main Verification Loop (Mirror of Main Loop)
+        foreach ($folderPath in $verifyFolders) {
+            $folder = Get-Item -LiteralPath $folderPath.FullName
+            $mkvFiles = Get-ChildItem -LiteralPath $folder.FullName -Filter "*.mkv" | Sort-Object Name
+            if ($mkvFiles.Count -eq 0) { continue }
+
+            Write-Host " Verifying: $($folderPath.FullName)..." -ForegroundColor DarkMagenta
+            
+            # Reset Grouping Map for this folder
+            $vGroupMap = @{}; $vCounter = 1
+            
+            # --- DYNAMIC PADDING (PER FOLDER) ---
+            $allCodecs = foreach ($f in $mkvFiles) { (& $mkvmerge -J $f.FullName | ConvertFrom-Json).tracks.codec }
+            $codecPadding = [Math]::Max(5, ($allCodecs | Measure-Object -Property Length -Maximum).Maximum)
+            $allTrackNames = foreach ($f in $mkvFiles) { (& $mkvmerge -J $f.FullName | ConvertFrom-Json).tracks.properties.track_name }
+            $namePadding = [Math]::Max(4, ($allTrackNames | Measure-Object -Property Length -Maximum).Maximum)
+            $propPadding = 9
+
+            # --- GROUPING LOGIC ---
+            $orderedGroups = New-Object System.Collections.Generic.List[PSObject]
+            foreach ($f in $mkvFiles) {
+                $json = & $mkvmerge -J $f.FullName | ConvertFrom-Json
+                $sig = (($json.tracks | ForEach-Object { "$($_.id)|$($_.type)|$($_.codec)|$($_.properties.language)|$($_.properties.default_track)|$($_.properties.track_name)" }) -join "`n")
+                
+                $existingGroup = $orderedGroups | Where-Object { $_.Sig -eq $sig }
+                if ($null -eq $existingGroup) {
+                    $orderedGroups.Add([PSCustomObject]@{ Sig = $sig; Files = New-Object System.Collections.Generic.List[PSObject]; Json = $json })
+                    $existingGroup = $orderedGroups[-1]
+                }
+                $existingGroup.Files.Add($f)
+            }
+
+            $primaryGroup = $orderedGroups[0]
+            $mismatches = $mkvFiles.Count - $primaryGroup.Files.Count
+
+            # --- PROCESS GROUPS ---
+            for ($g = 0; $g -lt $orderedGroups.Count; $g++) {
+                $currentGroup = $orderedGroups[$g]
+                $sig = $currentGroup.Sig
+                if (-not $vGroupMap.ContainsKey($sig)) { $vGroupMap[$sig] = $vGroupMap.Count + 1 }
+                $stableIndex = $vGroupMap[$sig]
+                $isPrimary = ($g -eq 0)
+                $repFile = $currentGroup.Files[0]
+                $reasons = Get-AuditFlags -tracks $currentGroup.Json.tracks -IsWestern $Western
+                
+                $entry = New-Object System.Collections.Generic.List[string]
+                if ($g -gt 0) { $entry.Add("") }
+
+                $label = switch ($stableIndex) {
+                    1 { "🌟PRIMARY 01🌟" }
+                    2 { "🔍SECONDARY 02" }
+                    3 { "📂TERTIARY 03" }
+                    4 { "📋QUATERNARY 04" }
+                    5 { "📌QUINARY 05" }
+                    6 { "🖇️SENARY 06" }
+                    7 { "📝SEPTENARY 07" }
+                    8 { "📔OCTONARY 08" }
+                    9 { "📁NONARY 09" }
+                    10 { "📜DENARY 10" }
+                    Default { "MISMATCH GROUP $stableIndex" }
+                }
+                
+                $shortName = if ($repFile.Name.Length -gt 40) { $repFile.Name.Substring(0, 40) } else { $repFile.Name }
+                
+                if ($isPrimary) {
+                    $entry.Add("--- $label [$shortName] MKV AUDIT: $($repFile.FullName) ---")
+                    $entry.Add("FILE NAME: $($repFile.Name)")
+                    # Fix syntax error with $() subexpression
+                    $entry.Add("REASON: " + $(if ($reasons -eq "") { "💎[Post-Fix Clear]" } else { $reasons }))
+                    $matchStatus = if ($mismatches -eq 0) { "✔+++All Files in Folder Match: YES ($($mkvFiles.Count))+++✔" } else { "❌+++All Files in Folder Match: NO (0)+++❌" }
+                    $entry.Add($matchStatus)
+                    & $script:PrintTable $currentGroup.Json "" $null
+                } else {
+                    $entry.Add("--- $label [$shortName] +MISMATCHED+ MKV: $($repFile.FullName) ---")
+                    $entry.Add("Primary: $($primaryGroup.Files[0].Name)")
+                    $entry.Add("REASON: $reasons")
+                    & $script:PrintTable $primaryGroup.Json "PRIMARY MKV TRACKS [$($primaryGroup.Files[0].Name)]:" $currentGroup.Json
+                    & $script:PrintTable $currentGroup.Json "CURRENT TRACKS [$($repFile.Name)]:" $primaryGroup.Json
+                }
+
+                $entry.Add("")
+                $entry.Add("===Matches ${label} [$shortName]: $($currentGroup.Files.Count.ToString('00'))===")
+                foreach ($fMatch in $currentGroup.Files) { $entry.Add("  - $($fMatch.Name)") }
+                $entry | Out-File $verifyLog -Append -Encoding utf8
+            }
+            
+            $spacer = "`r`n.• ♬ ͜͝ ̣̣♡.• ♬ ͜͝ ̣̣♡.• ♬ ͜͝ ̣̣♡..• ♬ ͜͝ ̣̣♡.• ♬ ͜͝ ̣̣♡.• ♬ ͜͝ ̣̣♡..• ♬ ͜͝ ̣̣♡.• ♬ ͜͝ ̣̣♡.• ♬ ͜͝ ̣̣♡.`r`n"
+            $spacer | Out-File $verifyLog -Append -Encoding utf8
+        }
+        Write-Host "`n [✓] Verification Complete." -ForegroundColor Green
+    } else {
+        Write-Host " [!] No update folders found to verify." -ForegroundColor DarkYellow
+    }
+    Write-Host "==================================================" -ForegroundColor Cyan
+}
+
+
+
 
 # --- FINAL GLOBAL SUMMARY ---
 if ($h10pCount -gt 0) {
