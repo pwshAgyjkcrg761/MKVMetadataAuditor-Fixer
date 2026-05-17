@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: MKVMetadataAuditor+Fixer.ps1
-# VERSION: 2026.05.17_16.10.00
+# VERSION: 2026.05.17_18.53.36
 # TARGET: PowerShell 7.6.1 LTS
 #
 # Copyright (C) 2026 pwsh.Agyjkcrg761
@@ -151,8 +151,8 @@ if ($Help -or $Manual) {
     Write-Host "  Direct Fix (No Backup) with Codec Priority:`n" -ForegroundColor DarkGray
     Write-Host "    .\MKVMetadataAuditor+Fixer.ps1 -Fix -FixNoBackup -sc 'ass,srt' -ovrd -Path 'G:\Media\Anime'`n" -ForegroundColor DarkCyan
     
-    Write-Host "  AVC High 10 Search Mode (Fast & No-Recurse):`n" -ForegroundColor DarkGray
-    Write-Host "    .\MKVMetadataAuditor+Fixer.ps1 -h10p -fast -nr -Path 'G:\Media\Anime'`n" -ForegroundColor DarkMagenta
+    Write-Host "  AVC High 10 Deep Scan Library Sweep (Fast Mode):`n" -ForegroundColor DarkGray
+    Write-Host "    .\MKVMetadataAuditor+Fixer.ps1 -h10p -fast -Path 'G:\Media\Anime'`n" -ForegroundColor DarkMagenta
     
     Write-Host "`n CORE FLAGS:`n" -ForegroundColor DarkYellow
 
@@ -209,6 +209,11 @@ if ($Help -or $Manual) {
     "      to confirm you want to change the video track language on",
     "      files that otherwise pass the audit.`n"  | ForEach-Object { Write-Host $_ -ForegroundColor DarkCyan }
     
+    "  -audioLanguageUpdate | -audf",
+    "      The safety toggle for audio metadata. This must be present",
+    "      to confirm you want to change the audio track language on",
+    "      files that otherwise pass the audit.`n"  | ForEach-Object { Write-Host $_ -ForegroundColor DarkMagenta }
+    
     "  -audioLanguagePriority | -aud <string>",
     "      Sets the 3-letter ISO code (e.g., 'jpn') for your primary audio.",
     "      It will automatically set this track as the 'Default' choice.`n"   | ForEach-Object { Write-Host $_ -ForegroundColor DarkMagenta }
@@ -227,7 +232,7 @@ if ($Help -or $Manual) {
     
     "  -FansubGroupPriority | -fg <string>",
     "      Sets preferred fansub groups for subtitle track prioritization",
-    "      (e.g., -fg 'commie'). Pass an empty string ("") to clear the",
+    "      (e.g., -fg 'commie'). Pass an empty string (`"`") to clear the",
     "      list and reset preferences via command line.`n" | ForEach-Object { Write-Host $_ -ForegroundColor DarkMagenta }
     
     Write-Host "`n WESTERN SPECIFIC:`n" -ForegroundColor DarkYellow
@@ -240,7 +245,11 @@ if ($Help -or $Manual) {
     "      Allows the script to save custom Western mode parameters to",
     "      the JSON configuration.`n"  | ForEach-Object { Write-Host $_ -ForegroundColor DarkMagenta }
 
-    Write-Host "`n GENERAL:`n" -ForegroundColor DarkYellow
+    Write-Host "`n ADVANCED & LOG MANAGEMENT FLAGS:`n" -ForegroundColor DarkYellow
+
+    "  -VerifyUpdates | -V | -Verify",
+    "      Chains an automated second-pass verification audit immediately after",
+    "      fixing, confirming header adjustments match intent perfectly. Requires -Fix.`n" | ForEach-Object { Write-Host $_ -ForegroundColor DarkMagenta }
     
     "  -help | -manual",
     "      Displays this manual for MKVMetadataAuditor+Fixer.ps1. The one you are",
@@ -249,6 +258,16 @@ if ($Help -or $Manual) {
     "  -DelLog",
     "      Clears all files within the logs directory (MKVMetadataAuditor+Fixer_logs) before",
     "      starting the operation.`n"  | ForEach-Object { Write-Host $_ -ForegroundColor DarkRed }
+    
+    "  -ClearDefaults | -clr",
+    "      Deletes the saved Anime configuration JSON template to reset rules back",
+    "      to factory script conditions.`n" | ForEach-Object { Write-Host $_ -ForegroundColor DarkCyan }
+
+    "  -ClearWesternDefaults | -clrw",
+    "      Deletes the custom Western configuration file to purge specialized rules.`n" | ForEach-Object { Write-Host $_ -ForegroundColor DarkMagenta }
+
+    "  -ClearAllDefaults | -cla",
+    "      Total system purge of both Anime and Western configuration JSON structures.`n" | ForEach-Object { Write-Host $_ -ForegroundColor DarkCyan }
     
     "  -excludePaths | -ep",
     "      Enables the exclusion engine. When active, the script will skip folders",
@@ -623,7 +642,7 @@ if (Test-Path $configFile) {
 
 # --- STARTUP DISPLAY ---
 Clear-Host
-$version = "2026.05.17_16.10.00"
+$version = "2026.05.17_18.53.36"
 
 # Determine Display Mode, Action, and Override Status
 if ($AvcHigh10Search -or $h10p) {
