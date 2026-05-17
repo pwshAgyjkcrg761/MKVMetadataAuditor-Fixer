@@ -43,7 +43,7 @@ The script employs a dual-engine approach to process files—handling Anime and 
 ### Mode & Search Flags
 | Flag | Description |
 | :--- | :--- |
-| `-Western | -w | -west | -WesternMode` | Sets defaults for Western media (English audio/subs). |
+| `-Western` | `-w` | `-west` | `-WesternMode` | Sets defaults for Western media (English audio/subs). |
 | `-AvcHigh10Search | -h10p` | **Search Mode:** Scans specifically for AVC High 10 (10-bit) video streams. |
 | `-AvcHigh10SearchDebug | -h10pDebug` | Enables verbose terminal output during the High 10 search. |
 | `-fast` | Speeds up the High 10 search by skipping extended metadata checks. |
