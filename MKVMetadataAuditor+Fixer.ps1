@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: MKVMetadataAuditor+Fixer.ps1
-# VERSION: 2026.05.18_11.13.00
+# VERSION: 2026.05.18_14.24.19
 # TARGET: PowerShell 7.6.1 LTS
 #
 # Copyright (C) 2026 pwsh.Agyjkcrg761
@@ -51,6 +51,8 @@ param (
     [switch]$AvcHigh10Search,
     
     [switch]$fast,
+    [Alias("lfp")]
+    [switch]$LogFullPath,
     
     [alias("h10pDebug")]
     [switch]$AvcHigh10SearchDebug,
@@ -98,7 +100,7 @@ param (
 )
 
 # --- GLOBAL VERSION DEFINITION ---
-$scriptVersion = "2026.05.18_11.13.00"
+$scriptVersion = "2026.05.18_14.24.19"
 
 # --- VERSION REPORTER ---
 if ($Version) {
@@ -205,6 +207,10 @@ if ($Help -or $Manual) {
     "  -fast",
     "      Speeds up the AVC High 10 Search by skipping extended metadata",
     "      checks. In this mode, progress tracks Folders processed.`n" | ForEach-Object { Write-Host $_ -ForegroundColor DarkMagenta }
+    
+    "  -LogFullPath | -lfp",
+    "      Forces the log to write the full file path instead of just the folder",
+    "      path during a fast AVC High 10 search. Requires -fast.`n" | ForEach-Object { Write-Host $_ -ForegroundColor DarkMagenta }
 
     "  -disableRecurse | -nr",
     "      Disables subfolder scanning. Only the root of the provided -Path", 
@@ -318,6 +324,24 @@ if (($FixNoBackup -or $FixDebug) -and -not $Fix) {
     exit
 }
 
+# --- SEARCH FLAG RESTRICTION ---
+$searchOnlyFlags = @()
+if ($PSBoundParameters.ContainsKey('fast')) { $searchOnlyFlags += "-fast" }
+if ($PSBoundParameters.ContainsKey('AvcHigh10SearchDebug')) { $searchOnlyFlags += "-h10pDebug" }
+if ($PSBoundParameters.ContainsKey('LogFullPath')) { $searchOnlyFlags += "-lfp" }
+
+if ($searchOnlyFlags.Count -gt 0 -and -not $AvcHigh10Search) {
+    Write-Host "`n[ERROR] Search-specific flag(s) detected: $($searchOnlyFlags -join ', ')" -ForegroundColor DarkRed
+    Write-Host "The flags -fast, -h10pDebug, and -lfp require -h10p (AvcHigh10Search) to be active.`n" -ForegroundColor DarkYellow
+    exit
+}
+
+if ($LogFullPath -and -not $fast) {
+    Write-Host "`n[ERROR] Invalid flag combination." -ForegroundColor DarkRed
+    Write-Host "The -lfp (LogFullPath) flag can only be used in conjunction with -fast.`n" -ForegroundColor DarkYellow
+    exit
+}
+
 if ($VerifyUpdates -and -not $Fix) {
     Write-Host "`n[ERROR] Invalid flag combination." -ForegroundColor DarkRed
     Write-Host "The -VerifyUpdates flag requires the -Fix switch to be active.`n" -ForegroundColor DarkYellow
@@ -359,7 +383,7 @@ if ($AvcHigh10Search) {
     }
     
     # Define exactly what IS allowed
-    $allowedH10pFlags = @('AvcHigh10Search', 'AvcHigh10SearchDebug', 'Fast', 'disableRecurse', 'Path', 'h10p', 'h10pDebug', 'PathParts', 'ep', 'excludePaths')
+    $allowedH10pFlags = @('AvcHigh10Search', 'AvcHigh10SearchDebug', 'Fast', 'disableRecurse', 'Path', 'h10p', 'h10pDebug', 'PathParts', 'ep', 'excludePaths', 'LogFullPath', 'lfp')
 
     # Check every flag the user actually typed
     foreach ($param in $PSBoundParameters.Keys) {
@@ -677,7 +701,8 @@ if ($AvcHigh10Search -or $h10p) {
     $fastStatus = if ($fast) { " Fast" } else { "" }
     $recurseStatus = if ($disableRecurse) { " [No-Recurse]" } else { "" }
     $h10pDebugStatus = if ($AvcHigh10SearchDebug) { " Debug" } else { "" }
-    $displayMode = "AVC High 10 Search Mode$fastStatus$h10pDebugStatus$recurseStatus"
+    $h10pLogFullPathStatus = if ($LogFullPath) { " Log Full Path" } else { "" }
+    $displayMode = "AVC High 10 Search Mode$fastStatus$h10pDebugStatus$recurseStatus$h10pLogFullPathStatus"
 } else {
     $modeBase = if ($Western) { "Western Mode" } else { "Anime Mode (default)" }
     $sdhStatus = if ($SubtitlesHearingImpaired) { " SDH" } else { "" }
@@ -770,8 +795,10 @@ if ($VerifyUpdates) {
 Write-Host "--------------------------------------------------"
 
 # Determine Start Message
-$startMessage = if ($AvcHigh10Search -and $Fast) { 
-    "Begin AVC High 10 Profile Search Fast?" 
+$startMessage = if ($AvcHigh10Search -and $Fast -and $LogFullPath) { 
+    "Begin AVC High 10 Profile Search Fast with Log Full File Path?" 
+} elseif ($AvcHigh10Search -and $Fast) { 
+    "Begin AVC High 10 Profile Search Fast?"
 } elseif ($AvcHigh10Search) { 
     "Begin AVC High 10 Profile Search?"
 } elseif ($Fix -and $FixNoBackup -and $VerifyUpdates) { 
@@ -832,12 +859,6 @@ if ($CurrentJob.Mode -eq "Verification") {
         Write-Host " Target: $($inputPaths -join ', ')" -ForegroundColor DarkGray        
         Write-Host "--------------------------------------------------" -ForegroundColor Cyan
         
-        # Write-Host "`n==================================================" -ForegroundColor Cyan
-        # Write-Host " RUNNING UPDATES VERIFICATION AUDIT..." -ForegroundColor Cyan
-        # Write-Host "==================================================" -ForegroundColor Cyan
-        # Write-Host " Target: $($inputPaths -join ', ')" -ForegroundColor DarkGray
-        # Write-Host " Log:    $detailLog" -ForegroundColor DarkGray
-        # Write-Host "--------------------------------------------------" -ForegroundColor Cyan
     }
 
 
@@ -1101,7 +1122,11 @@ foreach ($folderPath in $targetFolders) {
                 $profile = (& $mediainfo --Inform="Video;%Format_Profile%" "$($f.FullName)").ToString().Trim()
                 if ($profile -match "High.*10") {
                     $h10pCount++
-                    $h10pList.Add($f.FullName)
+                    
+                    # Logic: If Fast mode and no FullPath requested, log the Folder Path for the exclusion list.
+                    $entryToAdd = if ($fast -and -not $LogFullPath) { $folderPath.FullName.TrimEnd('\') } else { $f.FullName }
+                    $h10pList.Add($entryToAdd)
+                    
                     Write-Host "`n"
                     
                     Write-Host "  [!] Found AVC High 10: $($f.Name)" -ForegroundColor DarkYellow
