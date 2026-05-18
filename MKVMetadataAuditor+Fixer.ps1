@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: MKVMetadataAuditor+Fixer.ps1
-# VERSION: 2026.05.18_14.24.19
+# VERSION: 2026.05.18_16.20.00
 # TARGET: PowerShell 7.6.1 LTS
 #
 # Copyright (C) 2026 pwsh.Agyjkcrg761
@@ -100,7 +100,7 @@ param (
 )
 
 # --- GLOBAL VERSION DEFINITION ---
-$scriptVersion = "2026.05.18_14.24.19"
+$scriptVersion = "2026.05.18_16.20.00"
 
 # --- VERSION REPORTER ---
 if ($Version) {
@@ -1738,7 +1738,7 @@ foreach ($folderPath in $targetFolders) {
     
 } # <--- END FOLDER LOOP
 
-if ($CurrentJob.Mode -eq "Standard") {
+if ($CurrentJob.Mode -eq "Standard" -and -not $AvcHigh10Search) {
     Write-Host "`n [✓] Standard Audit Complete." -ForegroundColor Green
     if ($Fix) {
         if ($script:FilesModifiedInJob -gt 0) {
