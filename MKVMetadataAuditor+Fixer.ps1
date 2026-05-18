@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: MKVMetadataAuditor+Fixer.ps1
-# VERSION: 2026.05.18_07.53.06
+# VERSION: 2026.05.18_11.13.00
 # TARGET: PowerShell 7.6.1 LTS
 #
 # Copyright (C) 2026 pwsh.Agyjkcrg761
@@ -98,7 +98,7 @@ param (
 )
 
 # --- GLOBAL VERSION DEFINITION ---
-$scriptVersion = "2026.05.18_07.53.06"
+$scriptVersion = "2026.05.18_11.13.00"
 
 # --- VERSION REPORTER ---
 if ($Version) {
@@ -1666,8 +1666,12 @@ foreach ($folderPath in $targetFolders) {
                 if ($IsFixRun -and $needsChange) {
                     if ($FixNoBackup) { $targetFile = $fToFix.FullName } 
                     else {
-                        # Anchor to the first path in $inputPaths (the one you dropped)
-                        $anchorRoot = $inputPaths[0]
+                        # Dynamically find which input path contains this file
+                        $anchorRoot = $inputPaths | Where-Object { $fToFix.FullName.StartsWith($_) } | Sort-Object Length -Descending | Select-Object -First 1
+                        
+                        # Fallback to first path if logic fails (safety)
+                        if (-not $anchorRoot) { $anchorRoot = $inputPaths[0] }
+                        
                         Invoke-MkvBackup -FilePath $fToFix.FullName -RootPath $anchorRoot
                         
                         $parentDir = Split-Path $anchorRoot -Parent
