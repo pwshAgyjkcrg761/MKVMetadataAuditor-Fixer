@@ -73,6 +73,7 @@ The script employs a dual-engine approach to process files—handling Anime and 
 | `-ClearWesternDefaults \| -clrw` | Deletes the custom Western configuration file to purge specialized rules. |
 | `-ClearAllDefaults \| -cla` | Total system purge of both Anime and Western configuration JSON structures. |
 | `-excludePaths \| -ep` | Enables the directory suppression exclusion engine (`MKVMetadataAuditor+Fixer__Excluded-Paths.txt`). |
+| `-Version \| -Ver` | Displays the script's current version number and exits immediately. |
 
 ---
 
