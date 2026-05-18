@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: MKVMetadataAuditor+Fixer.ps1
-# VERSION: 2026.05.17_18.53.36
+# VERSION: 2026.05.18_07.53.06
 # TARGET: PowerShell 7.6.1 LTS
 #
 # Copyright (C) 2026 pwsh.Agyjkcrg761
@@ -86,6 +86,9 @@ param (
     [Alias("V", "Verify")]
     [switch]$VerifyUpdates,
     
+    [Alias("Ver")]
+    [switch]$Version,
+    
     #[Parameter(Mandatory=$false)]
     [switch]$Help,
 
@@ -93,6 +96,15 @@ param (
     [switch]$Manual
     
 )
+
+# --- GLOBAL VERSION DEFINITION ---
+$scriptVersion = "2026.05.18_07.53.06"
+
+# --- VERSION REPORTER ---
+if ($Version) {
+    Write-Host "MKVMetadataAuditor+Fixer.ps1 v$scriptVersion" -ForegroundColor Cyan
+    exit
+}
 
 # HELP & MANUAL SYSTEM FUNCTIONS
 function Write-ColorBlock ($Lines, $Color) {
@@ -103,7 +115,8 @@ function Write-ColorBlock ($Lines, $Color) {
 if ($Help -or $Manual) {
     Clear-Host
     Write-Host "============================================================" -ForegroundColor Cyan
-    Write-Host " MKVMetadataAuditor+Fixer.ps1 - MANUAL & USAGE GUIDE" -ForegroundColor DarkMagenta
+               " MKVMetadataAuditor+Fixer.ps1 v$scriptVersion  ",
+               " MANUAL & USAGE GUIDE" | ForEach-Object { Write-Host $_ -ForegroundColor DarkMagenta }
     Write-Host " Copyright (C) 2026 pwsh.Agyjkcrg761`n" -ForegroundColor DarkCyan
     
      " This program is free software: you can redistribute it and/or",
@@ -216,34 +229,34 @@ if ($Help -or $Manual) {
     
     "  -audioLanguagePriority | -aud <string>",
     "      Sets the 3-letter ISO code (e.g., 'jpn') for your primary audio.",
-    "      It will automatically set this track as the 'Default' choice.`n"   | ForEach-Object { Write-Host $_ -ForegroundColor DarkMagenta }
+    "      It will automatically set this track as the 'Default' choice.`n"   | ForEach-Object { Write-Host $_ -ForegroundColor DarkCyan }
     
     "  -subtitleLanguagePriority | -sub <string>", 
     "      Sets the primary subtitle language. The script uses weighted",
-    "      scoring to find the best dialogue track in this language.`n"  | ForEach-Object { Write-Host $_ -ForegroundColor DarkCyan }
+    "      scoring to find the best dialogue track in this language.`n"  | ForEach-Object { Write-Host $_ -ForegroundColor DarkMagenta }
     
     "  -subtitleCodecPriority | -sc <string>",
     "      A comma-separated list (e.g., 'ass,srt') that dictates which",
-    "      subtitle formats to prefer when multiple tracks are available.`n"  | ForEach-Object { Write-Host $_ -ForegroundColor DarkMagenta }
+    "      subtitle formats to prefer when multiple tracks are available.`n"  | ForEach-Object { Write-Host $_ -ForegroundColor DarkCyan }
     
     "  -Honorifics | -Hon",
     "      Injects a +300 score bonus to tracks labeled with 'honorifics'",
-    "      or 'enm', ensuring they are selected over standard dialogue.`n"  | ForEach-Object { Write-Host $_ -ForegroundColor DarkCyan }
+    "      or 'enm', ensuring they are selected over standard dialogue.`n"  | ForEach-Object { Write-Host $_ -ForegroundColor DarkMagenta }
     
     "  -FansubGroupPriority | -fg <string>",
     "      Sets preferred fansub groups for subtitle track prioritization",
     "      (e.g., -fg 'commie'). Pass an empty string (`"`") to clear the",
-    "      list and reset preferences via command line.`n" | ForEach-Object { Write-Host $_ -ForegroundColor DarkMagenta }
+    "      list and reset preferences via command line.`n" | ForEach-Object { Write-Host $_ -ForegroundColor DarkCyan }
     
     Write-Host "`n WESTERN SPECIFIC:`n" -ForegroundColor DarkYellow
 
     "  -SubtitlesHearingImpaired | -sdh | -hi | -hicc | -cc",
     "      Forces the script to prioritize 'Hearing Impaired' or 'SDH'",
-    "      subtitle tracks for Western media.`n"  | ForEach-Object { Write-Host $_ -ForegroundColor DarkCyan }
+    "      subtitle tracks for Western media.`n"  | ForEach-Object { Write-Host $_ -ForegroundColor DarkMagenta }
     
     "  -OverrideWesternDefaults | -ovrdw",
     "      Allows the script to save custom Western mode parameters to",
-    "      the JSON configuration.`n"  | ForEach-Object { Write-Host $_ -ForegroundColor DarkMagenta }
+    "      the JSON configuration.`n"  | ForEach-Object { Write-Host $_ -ForegroundColor DarkCyan }
 
     Write-Host "`n ADVANCED & LOG MANAGEMENT FLAGS:`n" -ForegroundColor DarkYellow
 
@@ -271,7 +284,10 @@ if ($Help -or $Manual) {
     
     "  -excludePaths | -ep",
     "      Enables the exclusion engine. When active, the script will skip folders",
-    "      listed in 'MKVMetadataAuditor+Fixer__Excluded-Paths.txt'.`n" | ForEach-Object { Write-Host $_ -ForegroundColor DarkCyan }
+    "      listed in 'MKVMetadataAuditor+Fixer__Excluded-Paths.txt'.`n" | ForEach-Object { Write-Host $_ -ForegroundColor DarkMagenta }
+    
+    "  -Version | -Ver",
+    "      Displays the script's current version number and exits immediately.`n" | ForEach-Object { Write-Host $_ -ForegroundColor DarkCyan }
     
 
     Write-Host "`n NOTES:" -ForegroundColor DarkYellow
@@ -330,8 +346,20 @@ if ($OverrideWesternDefaults -and -not $Western) {
 
 # AVC High 10 Profile Whitelist Validation
 if ($AvcHigh10Search) {
+    
+    # Block the -fast + -nr combination to prevent a "1-file-only" scan
+    if ($fast -and $disableRecurse) {
+        Write-Host ""
+        Write-Host " [!] ERROR: Invalid flag combination." -ForegroundColor DarkRed
+        Write-Host " -fast and -nr (No-Recurse) cannot be used together in Search Mode." -ForegroundColor DarkYellow
+        Write-Host " -fast scans only the first file per folder. Combined with -nr, this" -ForegroundColor Gray
+        Write-Host " would result in only a single file being scanned in the entire session." -ForegroundColor Gray
+        Write-Host ""
+        exit
+    }
+    
     # Define exactly what IS allowed
-    $allowedH10pFlags = @('AvcHigh10Search', 'AvcHigh10SearchDebug', 'Fast', 'disableRecurse', 'Path', 'h10p', 'h10pDebug', 'PathParts', 'ep', 'excludePaths', 'VerifyUpdates', 'V', 'Verify')
+    $allowedH10pFlags = @('AvcHigh10Search', 'AvcHigh10SearchDebug', 'Fast', 'disableRecurse', 'Path', 'h10p', 'h10pDebug', 'PathParts', 'ep', 'excludePaths')
 
     # Check every flag the user actually typed
     foreach ($param in $PSBoundParameters.Keys) {
@@ -424,7 +452,7 @@ $vLogDir = Join-Path $rootLog "Updates_Verification_Logs"
 $ts = Get-Date -Format "yyyy-MM-dd_HH-mm-ss"
 
 # Create the folders
-foreach ($dir in @($rootLog,$pLogDir,$dLogDir,$mLogDir,$cLogDir,$fLogDir,$h10pLogDir)) { 
+foreach ($dir in @($rootLog,$pLogDir,$dLogDir,$mLogDir,$cLogDir,$fLogDir,$h10pLogDir,$vLogDir)) { 
     if (-not (Test-Path $dir)) { New-Item $dir -ItemType Directory | Out-Null } 
 }
 
@@ -642,27 +670,28 @@ if (Test-Path $configFile) {
 
 # --- STARTUP DISPLAY ---
 Clear-Host
-$version = "2026.05.17_18.53.36"
+$uiversion = $scriptVersion
 
 # Determine Display Mode, Action, and Override Status
 if ($AvcHigh10Search -or $h10p) {
     $fastStatus = if ($fast) { " Fast" } else { "" }
     $recurseStatus = if ($disableRecurse) { " [No-Recurse]" } else { "" }
-    $displayMode = "AVC High 10 Search Mode$fastStatus$recurseStatus"
+    $h10pDebugStatus = if ($AvcHigh10SearchDebug) { " Debug" } else { "" }
+    $displayMode = "AVC High 10 Search Mode$fastStatus$h10pDebugStatus$recurseStatus"
 } else {
     $modeBase = if ($Western) { "Western Mode" } else { "Anime Mode (default)" }
     $sdhStatus = if ($SubtitlesHearingImpaired) { " SDH" } else { "" }
     $action = if ($Fix) { "Audit & Fix" } else { "Audit" }
     $recurseStatus = if ($disableRecurse) { " [No-Recurse]" } else { "" }
     $nobackupStatus = if ($FixNoBackup) { " NO BACKUP!" } else { "" }
-    $debugStatus = if ($FixDebug) { " Debug" } else { "" }
+    $FixdebugStatus = if ($FixDebug) { " Debug" } else { "" }
     $ovrdStatus = if ($overrideDefaults -or $OverrideWesternDefaults) { " override defaults" } else { "" }
     $verifyStatus = if ($VerifyUpdates) { " + Verification" } else { "" }
-    $displayMode = "$modeBase $action$nobackupStatus$debugStatus$ovrdStatus$sdhStatus$recurseStatus$verifyStatus"
+    $displayMode = "$modeBase $action$nobackupStatus$FixdebugStatus$ovrdStatus$sdhStatus$recurseStatus$verifyStatus"
 }
 
 Write-Host "=================================================="
-Write-Host "MKVMetadataAuditor+Fixer.ps1 v$version" -ForegroundColor Cyan
+Write-Host "MKVMetadataAuditor+Fixer.ps1 v$uiversion" -ForegroundColor Cyan
 Write-Host "=================================================="
 Write-Host $displayMode -ForegroundColor Blue
 if ($FixNoBackup) {
@@ -741,10 +770,16 @@ if ($VerifyUpdates) {
 Write-Host "--------------------------------------------------"
 
 # Determine Start Message
-$startMessage = if ($AvcHigh10Search) { 
-    "Begin AVC High 10 Profile Search?" 
+$startMessage = if ($AvcHigh10Search -and $Fast) { 
+    "Begin AVC High 10 Profile Search Fast?" 
+} elseif ($AvcHigh10Search) { 
+    "Begin AVC High 10 Profile Search?"
+} elseif ($Fix -and $FixNoBackup -and $VerifyUpdates) { 
+    "Begin Auditing and Fixing with NO BACKUP then Verify?"    
 } elseif ($Fix -and $FixNoBackup) { 
     "Begin Auditing then Fixing with NO BACKUP?"
+} elseif ($Fix -and $VerifyUpdates) { 
+    "Begin Auditing and Fixing then Verify?" 
 } elseif ($Fix) { 
     "Begin Auditing then Fixing?" 
 } else { 
@@ -785,6 +820,7 @@ for ($j = 0; $j -lt $AuditJobs.Count; $j++) {
     # This allows your existing logic to run unmodified
     $inputPaths = $CurrentJob.TargetPaths
     $detailLog  = $CurrentJob.ActiveLog
+    $script:FilesModifiedInJob = 0
     
     # Safety: Ensure Fix mode only runs on the Standard audit, never on Verification
     $IsFixRun = ($Fix -and ($CurrentJob.Mode -eq "Standard"))
@@ -815,14 +851,6 @@ function Get-Selector {
     return "$letter$val"
 }
 
-# function Get-Selector {
-    # param($type, [switch]$Reset)
-    # if ($Reset) { $global:trackCounters = @{ "video" = 1; "audio" = 1; "subtitles" = 1 }; return "" }
-    # $val = $global:trackCounters[$type]
-    # $letter = switch ($type) { "video" { "v" } "audio" { "a" } "subtitles" { "s" } }
-    # $global:trackCounters[$type]++
-    # return "$letter$val"
-# }
 
 function Invoke-MkvBackup {
     param([string]$FilePath, [string]$RootPath)
@@ -1657,6 +1685,7 @@ foreach ($folderPath in $targetFolders) {
                             [void]$fixDetails.Add("  DEBUG_CMD: $fullCmd")
                         }
                         & $mkvpropedit "$targetFile" @Params | Out-Null
+                        $script:FilesModifiedInJob++
                         [void]$fixDetails.Add("  STATUS: Changes applied to -> $targetFile")
                     }
                 }
@@ -1683,7 +1712,11 @@ foreach ($folderPath in $targetFolders) {
 if ($CurrentJob.Mode -eq "Standard") {
     Write-Host "`n [✓] Standard Audit Complete." -ForegroundColor Green
     if ($Fix) {
-        Write-Host " [✓] Fixer Operations Complete." -ForegroundColor Green
+        if ($script:FilesModifiedInJob -gt 0) {
+            Write-Host " [✓] Fixer Operations Complete. Files Modified: $script:FilesModifiedInJob" -ForegroundColor Green
+        } else {
+            Write-Host " [i] Fixer Operations Complete. All files passed audit (No changes required)." -ForegroundColor Cyan
+        }
     }
 }
 
