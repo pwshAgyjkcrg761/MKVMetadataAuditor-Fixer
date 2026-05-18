@@ -47,6 +47,7 @@ The script employs a dual-engine approach to process files—handling Anime and 
 | `-AvcHigh10Search \| -h10p` | **Search Mode:** Scans specifically for AVC High 10 (10-bit) video streams. |
 | `-AvcHigh10SearchDebug \| -h10pDebug` | Enables verbose terminal output during the High 10 search. |
 | `-fast` | Speeds up the High 10 search by skipping extended metadata checks. |
+| `-LogFullPath \| -lfp` | Forces the log to write the full file path instead of just the folder path during a fast AVC High 10 search. Requires -fast. |
 | `-disableRecurse \| -nr` | **No-Recurse:** Disables subfolder scanning; only processes the root path. |
 
 ### Track Priorities & Automation
