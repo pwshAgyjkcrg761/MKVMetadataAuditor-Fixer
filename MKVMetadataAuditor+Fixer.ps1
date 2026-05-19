@@ -3,7 +3,7 @@
 # VERSION: 2026.05.18_16.20.00
 # TARGET: PowerShell 7.6.1 LTS
 #
-# Copyright (C) 2026 pwsh.Agyjkcrg761
+# Copyright (C) 2026 pwshAgyjkcrg761
 # 
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -119,7 +119,7 @@ if ($Help -or $Manual) {
     Write-Host "============================================================" -ForegroundColor Cyan
                " MKVMetadataAuditor+Fixer.ps1 v$scriptVersion  ",
                " MANUAL & USAGE GUIDE" | ForEach-Object { Write-Host $_ -ForegroundColor DarkMagenta }
-    Write-Host " Copyright (C) 2026 pwsh.Agyjkcrg761`n" -ForegroundColor DarkCyan
+    Write-Host " Copyright (C) 2026 pwshAgyjkcrg761`n" -ForegroundColor DarkCyan
     
      " This program is free software: you can redistribute it and/or",
      " modify it under the terms of the GNU General Public License as",
