@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: MKVMetadataAuditor+Fixer.ps1
-# VERSION: 2026.05.18_16.20.00
+# VERSION: 2026.05.19_17.44.00
 # TARGET: PowerShell 7.6.1 LTS
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -100,7 +100,7 @@ param (
 )
 
 # --- GLOBAL VERSION DEFINITION ---
-$scriptVersion = "2026.05.18_16.20.00"
+$scriptVersion = "2026.05.19_17.44.00"
 
 # --- VERSION REPORTER ---
 if ($Version) {
@@ -119,7 +119,7 @@ if ($Help -or $Manual) {
     Write-Host "============================================================" -ForegroundColor Cyan
                " MKVMetadataAuditor+Fixer.ps1 v$scriptVersion  ",
                " MANUAL & USAGE GUIDE" | ForEach-Object { Write-Host $_ -ForegroundColor DarkMagenta }
-    Write-Host " Copyright (C) 2026 pwshAgyjkcrg761`n" -ForegroundColor DarkCyan
+    Write-Host " Copyright (C) 2026 pwsh.Agyjkcrg761`n" -ForegroundColor DarkCyan
     
      " This program is free software: you can redistribute it and/or",
      " modify it under the terms of the GNU General Public License as",
@@ -1392,7 +1392,8 @@ foreach ($folderPath in $targetFolders) {
                 # --- [AUDIO FORCE PRE-CHECK] ---
                 $undAudioCount = ($currentGroup.Json.tracks | Where-Object { $_.type -eq "audio" -and $_.properties.language -eq "und" } | Measure-Object).Count
                 $totalAudioCount = ($currentGroup.Json.tracks | Where-Object { $_.type -eq "audio" } | Measure-Object).Count
-                $canForceAudio = ($audioLanguageUpdate -and $undAudioCount -eq 1)
+                # Logic: Allow force if user provided -audf and it's a single-audio file (regardless of current lang)
+                $canForceAudio = ($audioLanguageUpdate -and $totalAudioCount -eq 1)
                 
                 # 3. GLOBAL SKIP FOR MULTI-VIDEO FILES
                 if ($videoCount -gt 1) {
@@ -1460,7 +1461,7 @@ foreach ($folderPath in $targetFolders) {
                                      else { "jpn" }
                                      
                     # --- AUDIO FORCE LOGIC (-audf) ---
-                    if ($t.type -eq "audio" -and $canForceAudio -and $t.properties.language -eq "und") {
+                    if ($t.type -eq "audio" -and $canForceAudio) {
                         $mkvID = $t.id + 1
                         $Params += @('--edit', "track:$mkvID", '--set', "language=$targetAudLang", '--set', "flag-default=1")
                         $needsChange = $true
