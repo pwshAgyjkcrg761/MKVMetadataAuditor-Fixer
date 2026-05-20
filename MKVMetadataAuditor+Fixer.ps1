@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: MKVMetadataAuditor+Fixer.ps1
-# VERSION: 2026.05.19_17.44.00
+# VERSION: 2026.05.20_01.47.00
 # TARGET: PowerShell 7.6.1 LTS
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -100,7 +100,7 @@ param (
 )
 
 # --- GLOBAL VERSION DEFINITION ---
-$scriptVersion = "2026.05.19_17.44.00"
+$scriptVersion = "2026.05.20_01.47.00"
 
 # --- VERSION REPORTER ---
 if ($Version) {
@@ -569,7 +569,10 @@ if ($Western -and $OverrideWesternDefaults -and ($null -ne $fixerConfig)) {
     if ($PSBoundParameters.ContainsKey('audioLanguagePriority')) { $fixerConfig.Audio.PreferredLanguage = $audioLanguagepriority; $needsUpdate = $true }
     if ($PSBoundParameters.ContainsKey('subtitleLanguagePriority'))   { $fixerConfig.Subtitles.PreferredLanguage = $subtitleLanguagepriority; $needsUpdate = $true }
     if ($PSBoundParameters.ContainsKey('subtitleCodecPriority'))     { 
-        $fixerConfig.Subtitles.CodecPriority = @($subtitleCodecPriority) + ($fixerConfig.Subtitles.CodecPriority | Where-Object { $_ -ne $subtitleCodecPriority })
+        $translatedPriority = foreach ($part in $subtitleCodecPriority.Split(',').Trim().ToLower()) {
+            if ($codecMap.ContainsKey($part)) { $codecMap[$part] } else { $part }
+        }
+        $fixerConfig.Subtitles.CodecPriority = @($translatedPriority) + ($fixerConfig.Subtitles.CodecPriority | Where-Object { $_ -notin $translatedPriority })
         $needsUpdate = $true 
     }
 
@@ -604,9 +607,12 @@ $langMap = @{
 }
 
 $codecMap = @{
-    "ass" = "S_TEXT/ASS"; "ssa" = "S_TEXT/SSA"
-    "srt" = "S_TEXT/UTF8"; "utf8" = "S_TEXT/UTF8"
-    "pgs" = "S_HDMV/PGS"; "vob" = "S_VOBSUB"
+    "ass" = "S_TEXT/(ASS|SSA)"
+    "ssa" = "S_TEXT/(ASS|SSA)"
+    "srt" = "S_TEXT/UTF8|S_SRT"
+    "utf8" = "S_TEXT/UTF8|S_SRT"
+    "pgs" = "S_HDMV/PGS"
+    "vob" = "S_VOBSUB"
 }
 
 # 2. APPLY OVERRIDES FROM COMMAND LINE
@@ -648,9 +654,9 @@ if ($subtitleFansubGroupPriority) {
 # 2.5 VALIDATION: Require the appropriate override switch for parameter usage
 $usedFlags = @()
 if ($PSBoundParameters.ContainsKey('videoLanguage')) { $usedFlags += "-vid" }
-if ($PSBoundParameters.ContainsKey('audioLanguage')) { $usedFlags += "-aud" }
-if ($PSBoundParameters.ContainsKey('subLanguage'))   { $usedFlags += "-sub" }
-if ($PSBoundParameters.ContainsKey('subCodec'))     { $usedFlags += "-sc" }
+if ($PSBoundParameters.ContainsKey('audioLanguagePriority')) { $usedFlags += "-aud" }
+if ($PSBoundParameters.ContainsKey('subLanguagePriority'))   { $usedFlags += "-sub" }
+if ($PSBoundParameters.ContainsKey('subtitleCodecPriority'))     { $usedFlags += "-sc" }
 if ($PSBoundParameters.ContainsKey('subtitleFansubGroupPriority')) { $usedFlags += "-fg" }
 
 # Determine which override switch is required based on the mode
@@ -1494,17 +1500,25 @@ foreach ($folderPath in $targetFolders) {
                         
                         # 2. Determine if it's a priority track (Codec Match)
                         $isCodecMatch = $false
-                        foreach ($c in $fixerConfig.Subtitles.CodecPriority) {
-                            if ($t.codec -match $c) { $isCodecMatch = $true; break }
+                        $codecScoreBonus = 0
+                        $trackCodecId = if ($t.properties.codec_id) { $t.properties.codec_id } else { $t.codec }
+                        for ($i = 0; $i -lt $fixerConfig.Subtitles.CodecPriority.Count; $i++) {
+                            $c = $fixerConfig.Subtitles.CodecPriority[$i]
+                            if ($trackCodecId -match $c -or $t.codec -match $c) {
+                                $isCodecMatch = $true
+                                # Scale score down from 100 based on index position (Index 0 gets 100, Index 5 gets 25)
+                                $codecScoreBonus = [Math]::Max(0, 100 - ($i * 15))
+                                break
+                            }
                         }
                         
                         # 3. SCORING
                         $score = 0
-                        if ($isCodecMatch) { $score += 50 }
+                        if ($isCodecMatch) { $score += $codecScoreBonus }
                         
                         # Priority for Dialogue / Penalty for Signs & Songs
-                        if ($trackName -match "Dialogue|Full Sub") { $score += 150 }
-                        if ($trackName -match "Signs|Songs|Lyrics") { $score -= 200 } # Heavy penalty
+                        if ($trackName -match "Dialogue|Full Sub|Full Dialogue|Japanese Audio") { $score += 150 }
+                        if ($trackName -match "Signs|Songs|Lyrics|English Audio|Partial|Forced") { $score -= 200 } # Heavy penalty
                         
                         if ($Honorifics -and (($trackName -match "honorifics|honors") -or ($trackLang -eq "enm"))) { $score += 300 }
                         
