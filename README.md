@@ -36,7 +36,7 @@ The script employs a dual-engine approach to process files—handling Anime and 
 | :--- | :--- |
 | `-Path <string>` | Defines the target directory for recursive scanning. |
 | `-Fix` | Enables **Write Mode**. Without this, the script runs in read-only audit mode. |
-| `-FixDebug` | Prints the exact `mkvpropedit` command strings before execution. |
+| `-FixDebug` | Prints the exact `mkvpropedit` command strings before execution and displays subtitle scoring logic—ideal for verifying complex changes. |
 | `-FixNoBackup` | Overwrites metadata directly on source files (disables `_updated` folder). |
 | `-overrideDefaults \| -ovrd` | **Mandatory** when using automation flags to save parameters to the JSON config. |
 
