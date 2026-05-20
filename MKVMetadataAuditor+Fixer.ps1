@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: MKVMetadataAuditor+Fixer.ps1
-# VERSION: 2026.05.20_01.47.00
+# VERSION: 2026.05.20__11.06.52
 # TARGET: PowerShell 7.6.1 LTS
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -100,7 +100,7 @@ param (
 )
 
 # --- GLOBAL VERSION DEFINITION ---
-$scriptVersion = "2026.05.20_01.47.00"
+$scriptVersion = "2026.05.20__11.06.52"
 
 # --- VERSION REPORTER ---
 if ($Version) {
@@ -108,9 +108,36 @@ if ($Version) {
     exit
 }
 
-# HELP & MANUAL SYSTEM FUNCTIONS
-function Write-ColorBlock ($Lines, $Color) {
-    foreach ($line in $Lines) { Write-Host $line -ForegroundColor $Color }
+# --- HELP & MANUAL REFACTORED COLOR REGULATOR BLOCK ---
+# $True means DarkCyan, $False means DarkMagenta
+$global:altColorToggle = $true  
+
+$PrintManualBlock = {
+    param(
+        [string]$FlagLine,
+        [string[]]$DescLines,
+        [string]$ForceDescColor = $null
+    )
+    
+    # 1. Print the Flag in DarkGreen
+    Write-Host $FlagLine -ForegroundColor DarkGreen
+    
+    # 2. Determine description color (Use forced color if passed, otherwise alternate)
+    $currentColor = if ($ForceDescColor) { 
+        $ForceDescColor 
+    } else { 
+        if ($global:altColorToggle) { "DarkCyan" } else { "DarkMagenta" } 
+    }
+    
+    # 3. Print the description lines
+    foreach ($line in $DescLines) {
+        Write-Host $line -ForegroundColor $currentColor
+    }
+    
+    # 4. Flip the alternating color toggle if we used a standard alternating color
+    if (-not $ForceDescColor) {
+        $global:altColorToggle = -not $global:altColorToggle
+    }
 }
 
 # --- HELP & MANUAL SYSTEM ---
@@ -171,130 +198,158 @@ if ($Help -or $Manual) {
     
     Write-Host "`n CORE FLAGS:`n" -ForegroundColor DarkYellow
 
-    "  -Path <string>",
+    &$PrintManualBlock "  -Path <string>" @(
     "      Defines the target directory. The script will recursively scan all",
-    "      subfolders for MKV files to perform bulk auditing.`n" | ForEach-Object { Write-Host $_ -ForegroundColor DarkMagenta }
+    "      subfolders for MKV files to perform bulk auditing.`n"
+)
 
-    "  -Fix",
+    &$PrintManualBlock "  -Fix" @(
     "      Enables 'Write Mode'. Without this, the script runs in read-only",
-    "      audit mode, generating logs without modifying any files.`n" | ForEach-Object { Write-Host $_ -ForegroundColor DarkCyan }
+    "      audit mode, generating logs without modifying any files.`n"
+)    
                     
-    "  -FixDebug",
+    &$PrintManualBlock "  -FixDebug" @(
     "      Prints the exact Mkvpropedit command strings to the console before",
-    "      execution—ideal for verifying complex logic changes.`n" | ForEach-Object { Write-Host $_ -ForegroundColor DarkMagenta }
+    "      execution and displays subtitle scoring logic—ideal for verifying complex changes.`n"
+)    
     
-    "  -FixNoBackup",
+    &$PrintManualBlock "  -FixNoBackup" @(
     "      Disables the '_updated' sibling folder creation. Use with caution,",
-    "      as this overwrites metadata directly on the source files.`n"  | ForEach-Object { Write-Host $_ -ForegroundColor DarkRed }
+    "      as this overwrites metadata directly on the source files.`n"
+) -ForceDescColor "DarkRed"
     
-    "  -overrideDefaults | -ovrd",
+    &$PrintManualBlock "  -overrideDefaults | -ovrd" @(
     "      Mandatory when using automation flags. It allows the script to",
-    "      write your current session parameters into the JSON config file.`n" | ForEach-Object { Write-Host $_ -ForegroundColor DarkMagenta }
+    "      write your current session parameters into the JSON config file.`n"
+)
     
     Write-Host "`n MODE FLAGS:`n" -ForegroundColor DarkYellow
 
-    "  -Western | -w | -west | -WesternMode",
-    "      Sets defaults for Western media (English audio/subs).`n" | ForEach-Object { Write-Host $_ -ForegroundColor DarkCyan }
+    &$PrintManualBlock "  -Western | -w | -west | -WesternMode" @(
+    "      Sets defaults for Western media (English audio/subs).`n"
+)
 
-    "  -AvcHigh10Search | -h10p",
+    &$PrintManualBlock "  -AvcHigh10Search | -h10p" @(
     "      Search Mode: Scans for AVC High 10 (10-bit) video streams. Use",
-    "      with -fast for quicker scanning.`n" | ForEach-Object { Write-Host $_ -ForegroundColor DarkMagenta }
-    
-    "  -AvcHigh10SearchDebug | -h10pDebug",
-    "      Enables verbose terminal output during the Search Mode scan,", 
-    "      displaying every file path being processed in real-time.`n" | ForEach-Object { Write-Host $_ -ForegroundColor DarkCyan }
-    
-    "  -fast",
-    "      Speeds up the AVC High 10 Search by skipping extended metadata",
-    "      checks. In this mode, progress tracks Folders processed.`n" | ForEach-Object { Write-Host $_ -ForegroundColor DarkMagenta }
-    
-    "  -LogFullPath | -lfp",
-    "      Forces the log to write the full file path instead of just the folder",
-    "      path during a fast AVC High 10 search. Requires -fast.`n" | ForEach-Object { Write-Host $_ -ForegroundColor DarkMagenta }
+    "      with -fast for quicker scanning.`n"
+)    
 
-    "  -disableRecurse | -nr",
+    &$PrintManualBlock "  -AvcHigh10SearchDebug | -h10pDebug" @(
+    "      Enables verbose terminal output during the Search Mode scan,", 
+    "      displaying every file path being processed in real-time.`n"
+)
+    
+    &$PrintManualBlock "  -fast" @(
+    "      Speeds up the AVC High 10 Search by skipping extended metadata",
+    "      checks. In this mode, progress tracks Folders processed.`n"
+)
+    
+    &$PrintManualBlock "  -LogFullPath | -lfp" @(
+    "      Forces the log to write the full file path instead of just the folder",
+    "      path during a fast AVC High 10 search. Requires -fast.`n"
+)
+
+    &$PrintManualBlock "  -disableRecurse | -nr" @(
     "      Disables subfolder scanning. Only the root of the provided -Path", 
-    "      will be processed.`n"   | ForEach-Object { Write-Host $_ -ForegroundColor DarkCyan }
+    "      will be processed.`n"
+)
     
     Write-Host "`n TRACK PRIORITIES & AUTOMATION:`n" -ForegroundColor DarkYellow
     
-    "  -videoLanguage | -vid <string>",
+    &$PrintManualBlock "  -videoLanguage | -vid <string>" @(
     "      Targets the video track language. Note: This is applied",
     "      automatically if the file requires other fixes. -vidf is",
-    "      only required if the file is already 'perfect'.`n"  | ForEach-Object { Write-Host $_ -ForegroundColor DarkMagenta }
+    "      only required if the file is already 'perfect'.`n"
+)
 
-    "  -videoForceUpdate | -vidf",
+    &$PrintManualBlock "  -videoForceUpdate | -vidf" @(
     "      The safety toggle for video metadata. This must be present",
     "      to confirm you want to change the video track language on",
-    "      files that otherwise pass the audit.`n"  | ForEach-Object { Write-Host $_ -ForegroundColor DarkCyan }
+    "      files that otherwise pass the audit.`n"
+)
     
-    "  -audioLanguageUpdate | -audf",
+    &$PrintManualBlock "  -audioLanguageUpdate | -audf" @(
     "      The safety toggle for audio metadata. This must be present",
     "      to confirm you want to change the audio track language on",
-    "      files that otherwise pass the audit.`n"  | ForEach-Object { Write-Host $_ -ForegroundColor DarkMagenta }
+    "      files that otherwise pass the audit.`n"
+)
     
-    "  -audioLanguagePriority | -aud <string>",
+    &$PrintManualBlock "  -audioLanguagePriority | -aud <string>" @(
     "      Sets the 3-letter ISO code (e.g., 'jpn') for your primary audio.",
-    "      It will automatically set this track as the 'Default' choice.`n"   | ForEach-Object { Write-Host $_ -ForegroundColor DarkCyan }
+    "      It will automatically set this track as the 'Default' choice.`n"
+)
     
-    "  -subtitleLanguagePriority | -sub <string>", 
+    &$PrintManualBlock "  -subtitleLanguagePriority | -sub <string>" @(
     "      Sets the primary subtitle language. The script uses weighted",
-    "      scoring to find the best dialogue track in this language.`n"  | ForEach-Object { Write-Host $_ -ForegroundColor DarkMagenta }
+    "      scoring to find the best dialogue track in this language.`n"
+)
     
-    "  -subtitleCodecPriority | -sc <string>",
+    &$PrintManualBlock "  -subtitleCodecPriority | -sc <string>" @(
     "      A comma-separated list (e.g., 'ass,srt') that dictates which",
-    "      subtitle formats to prefer when multiple tracks are available.`n"  | ForEach-Object { Write-Host $_ -ForegroundColor DarkCyan }
+    "      subtitle formats to prefer when multiple tracks are available.`n"
+)
     
-    "  -Honorifics | -Hon",
+    &$PrintManualBlock "  -Honorifics | -Hon" @(
     "      Injects a +300 score bonus to tracks labeled with 'honorifics'",
-    "      or 'enm', ensuring they are selected over standard dialogue.`n"  | ForEach-Object { Write-Host $_ -ForegroundColor DarkMagenta }
+    "      or 'enm', ensuring they are selected over standard dialogue.`n"
+)
     
-    "  -FansubGroupPriority | -fg <string>",
+    &$PrintManualBlock "  -FansubGroupPriority | -fg <string>" @(
     "      Sets preferred fansub groups for subtitle track prioritization",
     "      (e.g., -fg 'commie'). Pass an empty string (`"`") to clear the",
-    "      list and reset preferences via command line.`n" | ForEach-Object { Write-Host $_ -ForegroundColor DarkCyan }
+    "      list and reset preferences via command line.`n"
+)
     
     Write-Host "`n WESTERN SPECIFIC:`n" -ForegroundColor DarkYellow
 
-    "  -SubtitlesHearingImpaired | -sdh | -hi | -hicc | -cc",
+    &$PrintManualBlock "  -SubtitlesHearingImpaired | -sdh | -hi | -hicc | -cc" @(
     "      Forces the script to prioritize 'Hearing Impaired' or 'SDH'",
-    "      subtitle tracks for Western media.`n"  | ForEach-Object { Write-Host $_ -ForegroundColor DarkMagenta }
+    "      subtitle tracks for Western media.`n"
+)
     
-    "  -OverrideWesternDefaults | -ovrdw",
+    &$PrintManualBlock "  -OverrideWesternDefaults | -ovrdw" @(
     "      Allows the script to save custom Western mode parameters to",
-    "      the JSON configuration.`n"  | ForEach-Object { Write-Host $_ -ForegroundColor DarkCyan }
+    "      the JSON configuration.`n"
+)
 
     Write-Host "`n ADVANCED & LOG MANAGEMENT FLAGS:`n" -ForegroundColor DarkYellow
 
-    "  -VerifyUpdates | -V | -Verify",
+    &$PrintManualBlock "  -VerifyUpdates | -V | -Verify" @(
     "      Chains an automated second-pass verification audit immediately after",
-    "      fixing, confirming header adjustments match intent perfectly. Requires -Fix.`n" | ForEach-Object { Write-Host $_ -ForegroundColor DarkMagenta }
+    "      fixing, confirming header adjustments match intent perfectly. Requires -Fix.`n"
+)
     
-    "  -help | -manual",
+    &$PrintManualBlock "  -help | -manual" @(
     "      Displays this manual for MKVMetadataAuditor+Fixer.ps1. The one you are",
-    "      reading right now.`n"  | ForEach-Object { Write-Host $_ -ForegroundColor DarkCyan }
+    "      reading right now.`n"
+)
     
-    "  -DelLog",
+    &$PrintManualBlock "  -DelLog" @(
     "      Clears all files within the logs directory (MKVMetadataAuditor+Fixer_logs) before",
-    "      starting the operation.`n"  | ForEach-Object { Write-Host $_ -ForegroundColor DarkRed }
+    "      starting the operation.`n"
+) -ForceDescColor "DarkRed"
     
-    "  -ClearDefaults | -clr",
+    &$PrintManualBlock "  -ClearDefaults | -clr" @(
     "      Deletes the saved Anime configuration JSON template to reset rules back",
-    "      to factory script conditions.`n" | ForEach-Object { Write-Host $_ -ForegroundColor DarkCyan }
+    "      to factory script conditions.`n"
+)
 
-    "  -ClearWesternDefaults | -clrw",
-    "      Deletes the custom Western configuration file to purge specialized rules.`n" | ForEach-Object { Write-Host $_ -ForegroundColor DarkMagenta }
+    &$PrintManualBlock "  -ClearWesternDefaults | -clrw" @(
+    "      Deletes the custom Western configuration file to purge specialized rules.`n"
+)
 
-    "  -ClearAllDefaults | -cla",
-    "      Total system purge of both Anime and Western configuration JSON structures.`n" | ForEach-Object { Write-Host $_ -ForegroundColor DarkCyan }
+    &$PrintManualBlock "  -ClearAllDefaults | -cla" @(
+    "      Total system purge of both Anime and Western configuration JSON structures.`n"
+)
     
-    "  -excludePaths | -ep",
+    &$PrintManualBlock "  -excludePaths | -ep" @(
     "      Enables the exclusion engine. When active, the script will skip folders",
-    "      listed in 'MKVMetadataAuditor+Fixer__Excluded-Paths.txt'.`n" | ForEach-Object { Write-Host $_ -ForegroundColor DarkMagenta }
+    "      listed in 'MKVMetadataAuditor+Fixer__Excluded-Paths.txt'.`n"
+)
     
-    "  -Version | -Ver",
-    "      Displays the script's current version number and exits immediately.`n" | ForEach-Object { Write-Host $_ -ForegroundColor DarkCyan }
-    
+    &$PrintManualBlock "  -Version | -Ver" @(
+    "      Displays the script's current version number and exits immediately.`n"
+)    
 
     Write-Host "`n NOTES:" -ForegroundColor DarkYellow
     "  * SCORING: Automatically penalizes 'Signs/Songs' tracks.",
@@ -1514,16 +1569,36 @@ foreach ($folderPath in $targetFolders) {
                         
                         # 3. SCORING
                         $score = 0
-                        if ($isCodecMatch) { $score += $codecScoreBonus }
+                        $ruleLog = New-Object System.Collections.Generic.List[string]
+                        
+                        if ($isCodecMatch) { 
+                            $score += $codecScoreBonus 
+                            [void]$ruleLog.Add("CodecMatch(+$codecScoreBonus)")
+                        }
                         
                         # Priority for Dialogue / Penalty for Signs & Songs
-                        if ($trackName -match "Dialogue|Full Sub|Full Dialogue|Japanese Audio") { $score += 150 }
-                        if ($trackName -match "Signs|Songs|Lyrics|English Audio|Partial|Forced") { $score -= 200 } # Heavy penalty
+                        if ($trackName -match "Dialogue|Full Sub|Full Dialogue|Japanese Audio") { 
+                            $score += 150 
+                            [void]$ruleLog.Add("Dialogue(+150)")
                         
-                        if ($Honorifics -and (($trackName -match "honorifics|honors") -or ($trackLang -eq "enm"))) { $score += 300 }
+                        } 
+                        
+                        if ($trackName -match "Signs|Songs|Lyrics|English Audio|Partial|Forced") { 
+                            $score -= 200 # Heavy penalty
+                            [void]$ruleLog.Add("SignsSongs(-200)")
+                        
+                        } 
+                        
+                        if ($Honorifics -and (($trackName -match "honorifics|honors") -or ($trackLang -eq "enm"))) { 
+                            $score += 300 
+                            [void]$ruleLog.Add("Honorifics(+300)")
+                        }
                         
                         # Dynamically match the configuration preference
-                        if ($trackLang -eq $fixerConfig.Subtitles.PreferredLanguage) { $score += 1 }
+                        if ($trackLang -eq $fixerConfig.Subtitles.PreferredLanguage) { 
+                            $score += 1 
+                            [void]$ruleLog.Add("LangPref(+1)")
+                        }
                         
                         # Fansub Group Priority Scoring (Anime Mode Only)
                         if (-not $Western -and $fixerConfig.Subtitles.FansubGroupPriority -and $fixerConfig.Subtitles.FansubGroupPriority.Count -gt 0 -and $trackName) {
@@ -1531,6 +1606,7 @@ foreach ($folderPath in $targetFolders) {
                                 $groupTarget = $fixerConfig.Subtitles.FansubGroupPriority[$i]
                                 if ($trackName -like "*$groupTarget*") {
                                     $score += (10000 - ($i * 1000))
+                                    [void]$ruleLog.Add("Fansub(${groupTarget}:+$bonus)")
                                     break
                                 }
                             }
@@ -1541,6 +1617,7 @@ foreach ($folderPath in $targetFolders) {
                             $isSDH = ($trackName -match "SDH|HI|CC" -or $t.properties.flag_hearing_impaired)
                             if ($trackLang -eq "eng" -and $isSDH) {
                                 $score += 500  # Massive boost to ensure SDH is selected as the top candidate
+                                [void]$ruleLog.Add("SDH_Boost(+500)")
                             }
                         }
                         
@@ -1549,6 +1626,7 @@ foreach ($folderPath in $targetFolders) {
                             # Dynamically verify against the profile language preference instead of hardcoded 'eng'
                             if ($trackLang -eq $fixerConfig.Subtitles.PreferredLanguage -and -not $t.properties.forced_track -and $trackName -notmatch "Signs|Songs|Lyrics") {
                                 $score += 200 
+                                [void]$ruleLog.Add("WesternFullSub(+200)")
                             }
                         }
                         
@@ -1561,6 +1639,7 @@ foreach ($folderPath in $targetFolders) {
                             Lang       = $trackLang
                             Name       = $t.properties.track_name
                             WasDefault = $isCurrentlyDefault
+                            Rules      = ($ruleLog -join ' | ')
                         }
                         continue 
                     } # <--- This is the first brace you were seeing
@@ -1586,6 +1665,17 @@ foreach ($folderPath in $targetFolders) {
                         }
                     }
                 } # <--- END TRACK LOOP
+                
+                # --- DEBUG: SCORING VISIBILITY ---
+                if ($FixDebug -and $subCandidates.Count -gt 0) {
+                    Write-Host "  [DEBUG] Subtitle Scoring Candidates:" -ForegroundColor Cyan
+                    [void]$fixDetails.Add("  [DEBUG] Subtitle Scoring Breakdown:")
+                    foreach ($cand in ($subCandidates | Sort-Object Score -Descending)) {
+                        $msg = "    -> ID:$($cand.ID) | Score: $($cand.Score) | Lang: $($cand.Lang) | Rules: [$($cand.Rules)] | Name: $($cand.Name)"
+                        Write-Host $msg -ForegroundColor Cyan
+                        [void]$fixDetails.Add($msg)
+                    }
+                }
                 
                 # --- CHOOSE BEST SUBTITLE & RESET OTHER SUB FLAGS ---
                 if ($subCandidates.Count -gt 0) {
