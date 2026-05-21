@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: MKVMetadataAuditor+Fixer.ps1
-# VERSION: 2026.05.21__11.04.00
+# VERSION: 2026.05.21__12.19.00
 # TARGET: PowerShell 7.6.1 LTS
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -103,7 +103,7 @@ param (
 )
 
 # --- GLOBAL VERSION DEFINITION ---
-$scriptVersion = "2026.05.21__11.04.00"
+$scriptVersion = "2026.05.21__12.19.00"
 
 # --- VERSION REPORTER ---
 if ($Version) {
@@ -295,6 +295,11 @@ if ($Help -or $Manual) {
     &$PrintManualBlock "  -Honorifics | -Hon" @(
     "      Injects a +300 score bonus to tracks labeled with 'honorifics'",
     "      or 'enm', ensuring they are selected over standard dialogue.`n"
+)
+
+    &$PrintManualBlock "  -SubtitleFactorTrackOrder | -SFTO | -SubTrackOrder | -TrackOrder" @(
+    "      Instructs the weighted scoring algorithm to factor in the physical",
+    "      track placement when determining priorities for subtitle selection.`n"
 )
     
     &$PrintManualBlock "  -FansubGroupPriority | -fg <string>" @(
