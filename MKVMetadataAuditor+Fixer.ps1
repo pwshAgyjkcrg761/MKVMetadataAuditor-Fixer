@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: MKVMetadataAuditor+Fixer.ps1
-# VERSION: 2026.05.20__11.06.52
+# VERSION: 2026.05.20__16.45.00
 # TARGET: PowerShell 7.6.1 LTS
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -100,7 +100,7 @@ param (
 )
 
 # --- GLOBAL VERSION DEFINITION ---
-$scriptVersion = "2026.05.20__11.06.52"
+$scriptVersion = "2026.05.20__16.45.00"
 
 # --- VERSION REPORTER ---
 if ($Version) {
@@ -1594,10 +1594,13 @@ foreach ($folderPath in $targetFolders) {
                             [void]$ruleLog.Add("Honorifics(+300)")
                         }
                         
-                        # Dynamically match the configuration preference
+                        # Tiered Language Scoring
                         if ($trackLang -eq $fixerConfig.Subtitles.PreferredLanguage) { 
-                            $score += 1 
-                            [void]$ruleLog.Add("LangPref(+1)")
+                            $score += 5000 
+                            [void]$ruleLog.Add("UserChoiceLang(+$($fixerConfig.Subtitles.PreferredLanguage):+5000)")
+                        } elseif ($trackLang -eq "und") {
+                            $score += 1000
+                            [void]$ruleLog.Add("UndefinedLangFallback(+1000)")
                         }
                         
                         # Fansub Group Priority Scoring (Anime Mode Only)
