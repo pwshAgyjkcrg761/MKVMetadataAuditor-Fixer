@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: MKVMetadataAuditor+Fixer.ps1
-# VERSION: 2026.05.21__09.15.00
+# VERSION: 2026.05.21__11.04.00
 # TARGET: PowerShell 7.6.1 LTS
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -57,6 +57,9 @@ param (
     [alias("h10pDebug")]
     [switch]$AvcHigh10SearchDebug,
     
+    [alias("SFTO", "SubTrackOrder", "TrackOrder")]
+    [switch]$SubtitleFactorTrackOrder,
+    
     # New Automation Params
     [Alias("vid")] [string]$videoLanguage,
     [Alias("vidf")] [switch]$videoForceUpdate,
@@ -100,7 +103,7 @@ param (
 )
 
 # --- GLOBAL VERSION DEFINITION ---
-$scriptVersion = "2026.05.21__09.15.00"
+$scriptVersion = "2026.05.21__11.04.00"
 
 # --- VERSION REPORTER ---
 if ($Version) {
@@ -792,6 +795,9 @@ Write-Host "  Video Target: " -NoNewline; Write-Host "$($fixerConfig.Video.Targe
 Write-Host "  Audio Target: " -NoNewline; Write-Host "$($fixerConfig.Audio.PreferredLanguage)" -ForegroundColor DarkMagenta
 Write-Host "  Sub Target:   " -NoNewline; Write-Host "$($fixerConfig.Subtitles.PreferredLanguage)" -ForegroundColor Blue
 Write-Host "  Sub Codecs:   " -NoNewline; Write-Host "$($fixerConfig.Subtitles.CodecPriority -join ', ')" -ForegroundColor DarkMagenta
+if ($SubtitleFactorTrackOrder) {
+        Write-Host "  Track Order:  " -NoNewline; Write-Host "Active (-SFTO)" -ForegroundColor Cyan
+    }
 if ($Honorifics) {
     Write-Host "  Honorifics:   " -NoNewline; Write-Host "$(if ($Honorifics) { "On" } else { "Off" })" -ForegroundColor Blue
 }
@@ -948,8 +954,9 @@ function Invoke-MkvBackup {
     
     # 3. Calculate the relative internal structure
     $relativeDir = ""
-    if ($FilePath.StartsWith($RootPath)) {
-        $relativeDir = (Split-Path $FilePath -Parent).Substring($RootPath.Length).TrimStart('\')
+    $parentPath = Split-Path $FilePath -Parent
+    if ($FilePath.StartsWith($RootPath) -and $parentPath.Length -gt $RootPath.Length) {
+        $relativeDir = $parentPath.Substring($RootPath.Length).TrimStart('\')
     }
     
     # 4. Construct the final target directory
@@ -1477,6 +1484,7 @@ foreach ($folderPath in $targetFolders) {
 
                 # 1. IDENTIFY TARGETS
                 Get-Selector -Reset
+                $subRelativeIndex = 0
                 
                 # NEW: Define videoCount here so the check below works
                 $videoCount = ($currentGroup.Json.tracks | Where-Object { $_.type -eq "video" } | Measure-Object).Count
@@ -1570,6 +1578,16 @@ foreach ($folderPath in $targetFolders) {
                         # 3. SCORING
                         $score = 0
                         $ruleLog = New-Object System.Collections.Generic.List[string]
+                        $subRelativeIndex++
+
+                        if ($SubtitleFactorTrackOrder) {
+                            $posPenaltyWeight = 40  # CONFIGURABLE: Points deducted per track position
+                            $posPenalty = ($subRelativeIndex - 1) * $posPenaltyWeight
+                            if ($posPenalty -gt 0) {
+                                $score -= $posPenalty
+                                [void]$ruleLog.Add("TrackOrder(-$posPenalty)")
+                            }
+                        }
                         
                         if ($isCodecMatch) { 
                             $score += $codecScoreBonus 
@@ -1830,7 +1848,12 @@ foreach ($folderPath in $targetFolders) {
                         $rootName = Split-Path $anchorRoot -Leaf
                         $backupRootPath = Join-Path $parentDir "$($rootName)_updated"
                         
-                        $relativeDir = (Split-Path $fToFix.FullName -Parent).Substring($anchorRoot.Length).TrimStart('\')
+                        $relativeDir = ""
+                        $fParent = Split-Path $fToFix.FullName -Parent
+                        if ($fParent.Length -gt $anchorRoot.Length) {
+                            $relativeDir = $fParent.Substring($anchorRoot.Length).TrimStart('\')
+                        }
+                        
                         $targetFile = Join-Path $backupRootPath $relativeDir (Split-Path $fToFix.FullName -Leaf)
                     }
 
