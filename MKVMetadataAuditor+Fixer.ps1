@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: MKVMetadataAuditor+Fixer.ps1
-# VERSION: 2026.05.21__12.19.00
+# VERSION: 2026.05.21__18.23.00
 # TARGET: PowerShell 7.6.1 LTS
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -103,12 +103,51 @@ param (
 )
 
 # --- GLOBAL VERSION DEFINITION ---
-$scriptVersion = "2026.05.21__12.19.00"
+$scriptVersion = "2026.05.21__18.23.00"
 
 # --- VERSION REPORTER ---
 if ($Version) {
     Write-Host "MKVMetadataAuditor+Fixer.ps1 v$scriptVersion" -ForegroundColor Cyan
     exit
+}
+
+# --- NATURAL SORT ENGINE (WINDOWS API) ---
+$NaturalSortDefinition = @'
+using System;
+using System.Runtime.InteropServices;
+using System.Collections.Generic;
+
+public class NaturalSort {
+    [DllImport("shlwapi.dll", CharSet = CharSet.Unicode)]
+    public static extern int StrCmpLogicalW(string psz1, string psz2);
+}
+'@
+if (-not ([System.Management.Automation.PSTypeName]"NaturalSort").Type) {
+    Add-Type -TypeDefinition $NaturalSortDefinition
+}
+
+function Sort-Natural {
+    param([Parameter(ValueFromPipeline=$true)]$InputObject)
+    begin { $all = [System.Collections.Generic.List[PSObject]]::new() }
+    process { if ($null -ne $_) { $all.Add($_) } }
+    end {
+        if ($all.Count -gt 1) {
+            $all.Sort({ param($a,$b) [NaturalSort]::StrCmpLogicalW($a.FullName, $b.FullName) })
+        }
+        return $all
+    }
+}
+
+function Sort-NaturalFiles {
+    param([Parameter(ValueFromPipeline=$true)]$InputObject)
+    begin { $all = [System.Collections.Generic.List[PSObject]]::new() }
+    process { if ($null -ne $_) { $all.Add($_) } }
+    end {
+        if ($all.Count -gt 1) {
+            $all.Sort({ param($a,$b) [NaturalSort]::StrCmpLogicalW($a.Name, $b.Name) })
+        }
+        return $all
+    }
 }
 
 # --- HELP & MANUAL REFACTORED COLOR REGULATOR BLOCK ---
@@ -1101,11 +1140,14 @@ $targetFolders = if ($disableRecurse) {
     # Strictly only use the input paths provided, no sub-directory gathering
     $inputPaths | ForEach-Object { Get-Item -LiteralPath $_ }
 } else {
-    Get-ChildItem -LiteralPath $inputPaths -Directory -Recurse | Sort-Object FullName
+    Get-ChildItem -LiteralPath $inputPaths -Directory -Recurse
 }
 if ($inputPaths.Count -gt 0) {
     $targetFolders = @($inputPaths | ForEach-Object { Get-Item -LiteralPath $_ }) + $targetFolders | Select-Object -Unique
 }
+
+# Final pass: Ensure all discovered folders are sorted using Natural Windows Logic
+$targetFolders = $targetFolders | Sort-Natural
 
 $fastHeaderWritten = $false
 
@@ -1148,7 +1190,7 @@ foreach ($folderPath in $targetFolders) {
     $global:GroupMap = @{}
     $global:Counter = 1
     $folder = Get-Item -LiteralPath $folderPath.FullName
-    $mkvFiles = Get-ChildItem -LiteralPath $folder.FullName -Filter "*.mkv" | Sort-Object Name
+    $mkvFiles = Get-ChildItem -LiteralPath $folder.FullName -Filter "*.mkv" | Sort-NaturalFiles
     if ($mkvFiles.Count -eq 0) { continue }
     
     # --- DYNAMIC PADDING (PER FOLDER) ---
