@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: MKVMetadataAuditor+Fixer.ps1
-# VERSION: 2026.05.20__16.45.00
+# VERSION: 2026.05.21__09.15.00
 # TARGET: PowerShell 7.6.1 LTS
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -100,7 +100,7 @@ param (
 )
 
 # --- GLOBAL VERSION DEFINITION ---
-$scriptVersion = "2026.05.20__16.45.00"
+$scriptVersion = "2026.05.21__09.15.00"
 
 # --- VERSION REPORTER ---
 if ($Version) {
@@ -1736,9 +1736,18 @@ foreach ($folderPath in $targetFolders) {
                     
                     $currentWinnerData = $currentGroup.Json.tracks | Where-Object { $_.id -eq $winner.ID }
                     
+                    # 1. Validation Logic
+                    # PROTECTION: Only change language label if it's currently Undefined
+                    $langNeedsFix = ($currentWinnerData.properties.language -eq "und")
+                    
+                    # PREFERRED OR NOTHING: Only set default if Lang matches target OR is being promoted from und
+                    $isWinnerValidForDefault = ($winner.Lang -eq $targetSubLang) -or ($winner.Lang -eq "und")
+                    $targetDefaultValue = if ($isWinnerValidForDefault) { 1 } else { 0 }
+                    
                     # 1. Check if the Winner needs updating (Lang, Default, or unwanted Forced/HICC)
-                    $winnerNeedsFix = ($currentWinnerData.properties.language -ne $targetSubLang) -or 
-                                      ($currentWinnerData.properties.default_track -ne $true) -or
+                    $winnerNeedsFix = ($langNeedsFix) -or 
+                                      ($currentWinnerData.properties.default_track -ne $targetDefaultValue) -or
+                                      ($currentWinnerData.properties.language -ne $targetSubLang) -or
                                       ($currentWinnerData.properties.forced_track -eq $true) -or
                                       ($currentWinnerData.properties.flag_hearing_impaired -eq $true)
                     
@@ -1767,8 +1776,18 @@ foreach ($folderPath in $targetFolders) {
                         $winID = $winner.ID + 1
                         
                         # Add Winner Fix
-                    $Params += @('--edit', "track:$winID", '--set', "language=$targetSubLang", '--set', "flag-default=1", '--set', "flag-forced=0", '--set', "flag-hearing-impaired=0")
-                    [void]$fixDetails.Add("  ACTION: SET_LANG=$targetSubLang | SET_DEFAULT=1 | TRACK: $winID | REASON: $subReason")
+                    $Params += @('--edit', "track:$winID", '--set', "flag-default=$targetDefaultValue", '--set', "flag-forced=0", '--set', "flag-hearing-impaired=0")
+                    $logActions = "SET_DEFAULT=$targetDefaultValue"
+                    
+                    if ($langNeedsFix) {
+                            $Params += @('--set', "language=$targetSubLang")
+                            $logActions += " | SET_LANG=$targetSubLang"
+                    }
+                        
+                    if (-not $isWinnerValidForDefault) { $subReason = "Preferred Lang Not Found (Setting All Defaults to 0)" }
+                        [void]$fixDetails.Add("  ACTION: $logActions | TRACK: $winID | REASON: $subReason")
+                    
+                    
 
                     # Add Loser Strips & Rename SDH to CC
                         foreach ($sub in $subCandidates) {
