@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: MKVMetadataAuditor+Fixer.ps1
-# VERSION: 2026.05.22__09.16.00
+# VERSION: 2026.05.22__09.47.00
 # TARGET: PowerShell 7.6.1 LTS
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -103,7 +103,7 @@ param (
 )
 
 # --- GLOBAL VERSION DEFINITION ---
-$scriptVersion = "2026.05.22__09.16.00"
+$scriptVersion = "2026.05.22__09.47.00"
 
 # --- VERSION REPORTER ---
 if ($Version) {
@@ -1737,10 +1737,7 @@ foreach ($folderPath in $targetFolders) {
                             $Params += @('--edit', "track:$mkvID", '--set', 'flag-forced=0')
                             $needsChange = $true 
                         }
-                        if ($t.properties.flag_hearing_impaired) { 
-                            $Params += @('--edit', "track:$mkvID", '--set', 'flag-hearing-impaired=0')
-                            $needsChange = $true 
-                        }
+                        
                     }
                 } # <--- END TRACK LOOP
                 
@@ -1778,10 +1775,10 @@ foreach ($folderPath in $targetFolders) {
                             foreach ($sub in $subCandidates) {
                                 if ($sub.ID -ne $sdhWinner.ID) {
                                     $lostTrack = $currentGroup.Json.tracks | Where-Object { $_.id -eq $sub.ID }
-                                    # Strip default, forced, AND hearing impaired flags from non-winners
-                                    if ($lostTrack.properties.default_track -or $lostTrack.properties.forced_track -or $lostTrack.properties.flag_hearing_impaired) {
+                                    # Strip default and forced flags from non-winners (Preserving HI Flag)
+                                    if ($lostTrack.properties.default_track -or $lostTrack.properties.forced_track) {
                                         $loseID = $sub.ID + 1
-                                        $Params += @('--edit', "track:$loseID", '--set', "flag-default=0", '--set', "flag-forced=0", '--set', "flag-hearing-impaired=0")
+                                        $Params += @('--edit', "track:$loseID", '--set', "flag-default=0", '--set', "flag-forced=0")
                                         $needsChange = $true
                                         [void]$fixDetails.Add("  ACTION: STRIP_FLAGS | TRACK: $loseID | REASON: Western SDH Conflict")
                                     }
@@ -1791,10 +1788,10 @@ foreach ($folderPath in $targetFolders) {
                             # Default Western behavior: Strip all subtitle flags
                             foreach ($sub in $subCandidates) {
                                 $thisTrack = $currentGroup.Json.tracks | Where-Object { $_.id -eq $sub.ID }
-                                # Modified to also strip the hearing impaired flag during generic cleanup
-                                if ($thisTrack.properties.default_track -or $thisTrack.properties.forced_track -or $thisTrack.properties.flag_hearing_impaired) {
+                                # Strip default and forced flags (Preserving HI Flag)
+                                if ($thisTrack.properties.default_track -or $thisTrack.properties.forced_track) {
                                     $loseID = $sub.ID + 1
-                                    $Params += @('--edit', "track:$loseID", '--set', "flag-default=0", '--set', "flag-forced=0", '--set', "flag-hearing-impaired=0")
+                                    $Params += @('--edit', "track:$loseID", '--set', "flag-default=0", '--set', "flag-forced=0")
                                     $needsChange = $true
                                     [void]$fixDetails.Add("  ACTION: STRIP_FLAGS | TRACK: $loseID | REASON: Western Mode (Clean)")
                                 }
@@ -1858,8 +1855,8 @@ foreach ($folderPath in $targetFolders) {
                         # FIX: Define $winID before using it
                         $winID = $winner.ID + 1
                         
-                        # Add Winner Fix
-                    $Params += @('--edit', "track:$winID", '--set', "flag-default=$targetDefaultValue", '--set', "flag-forced=0", '--set', "flag-hearing-impaired=0")
+                    # Add Winner Fix
+                    $Params += @('--edit', "track:$winID", '--set', "flag-default=$targetDefaultValue", '--set', "flag-forced=0")
                     $logActions = "SET_DEFAULT=$targetDefaultValue"
                     
                     if ($langNeedsFix) {
@@ -1872,24 +1869,15 @@ foreach ($folderPath in $targetFolders) {
                     
                     
 
-                    # Add Loser Strips & Rename SDH to CC
+                    # Add Loser Strips (Preserving Name and HI Flag)
                         foreach ($sub in $subCandidates) {
                             if ($sub.ID -ne $winner.ID) {
                                 $lostTrack = $currentGroup.Json.tracks | Where-Object { $_.id -eq $sub.ID }
                                 $loseID = $sub.ID + 1
                                 
-                                # Try to find the name in either common property location
-                                $currentName = $lostTrack.properties.name
-                                if (-not $currentName) { $currentName = $lostTrack.properties.track_name }
-
-                                # Start the edit for this track
-                                $Params += @('--edit', "track:$loseID", '--set', "flag-default=0", '--set', "flag-forced=0", '--set', "flag-hearing-impaired=0")
-                                
-                                # If we found a name and it contains SDH, apply the fix
-                                if ($currentName -and $currentName -like "*SDH*") {
-                                    $newName = $currentName -replace "SDH", "CC"
-                                    $Params += @('--set', "name=$newName")
-                                }
+                                # Strip default and forced flags only
+                                $Params += @('--edit', "track:$loseID", '--set', "flag-default=0", '--set', "flag-forced=0")
+                            
                             }
                         } # Closes foreach
                     } # Closes Mechanical Trigger
