@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: MKVMetadataAuditor+Fixer.ps1
-# VERSION: 2026.05.21__18.23.00
+# VERSION: 2026.05.21__23.23.00
 # TARGET: PowerShell 7.6.1 LTS
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -103,7 +103,7 @@ param (
 )
 
 # --- GLOBAL VERSION DEFINITION ---
-$scriptVersion = "2026.05.21__18.23.00"
+$scriptVersion = "2026.05.21__23.23.00"
 
 # --- VERSION REPORTER ---
 if ($Version) {
@@ -1660,12 +1660,19 @@ foreach ($folderPath in $targetFolders) {
                         }
                         
                         # Tiered Language Scoring
-                        if ($trackLang -eq $fixerConfig.Subtitles.PreferredLanguage) { 
+                        $isPrefLang = ($trackLang -eq $fixerConfig.Subtitles.PreferredLanguage)
+                        # Special Case: treat 'enm' as 'eng' ONLY if Honorifics mode is active
+                        if (-not $isPrefLang -and $Honorifics -and $fixerConfig.Subtitles.PreferredLanguage -eq "eng" -and $trackLang -eq "enm") {
+                            $isPrefLang = $true
+                        }
+
+                        if ($isPrefLang) { 
                             $score += 5000 
-                            [void]$ruleLog.Add("UserChoiceLang(+$($fixerConfig.Subtitles.PreferredLanguage):+5000)")
-                        } elseif ($trackLang -eq "und") {
+                            [void]$ruleLog.Add("UserChoiceLang(+$($trackLang):+5000)")
+                        } elseif ($trackLang -eq "und" -or ($trackLang -eq "enm" -and -not $isPrefLang)) {
+                            # If enm is found but Hon mode is off, treat it as a Tier 2 fallback (like Undefined)
                             $score += 1000
-                            [void]$ruleLog.Add("UndefinedLangFallback(+1000)")
+                            [void]$ruleLog.Add("EnglishVariantFallback(+$($trackLang):+1000)")
                         }
                         
                         # Fansub Group Priority Scoring (Anime Mode Only)
@@ -1803,10 +1810,15 @@ foreach ($folderPath in $targetFolders) {
                     
                     # 1. Validation Logic
                     # PROTECTION: Only change language label if it's currently Undefined
-                    $langNeedsFix = ($currentWinnerData.properties.language -eq "und")
+                    # OR if it's 'enm' and target is 'eng' (improves player compatibility).
+                    $langNeedsFix = ($currentWinnerData.properties.language -eq "und") -or
+                                    ($currentWinnerData.properties.language -eq "enm" -and $targetSubLang -eq "eng")
                     
-                    # PREFERRED OR NOTHING: Only set default if Lang matches target OR is being promoted from und
-                    $isWinnerValidForDefault = ($winner.Lang -eq $targetSubLang) -or ($winner.Lang -eq "und")
+                    # PREFERRED OR NOTHING: Only set default if Lang matches target OR is being promoted (und/enm)
+                    $isWinnerValidForDefault = ($winner.Lang -eq $targetSubLang) -or 
+                                               ($winner.Lang -eq "und") -or 
+                                               ($winner.Lang -eq "enm" -and $targetSubLang -eq "eng")
+
                     $targetDefaultValue = if ($isWinnerValidForDefault) { 1 } else { 0 }
                     
                     # 1. Check if the Winner needs updating (Lang, Default, or unwanted Forced/HICC)
