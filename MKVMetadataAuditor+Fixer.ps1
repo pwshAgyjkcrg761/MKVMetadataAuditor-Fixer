@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: MKVMetadataAuditor+Fixer.ps1
-# VERSION: 2026.05.21__23.23.00
+# VERSION: 2026.05.22__09.16.00
 # TARGET: PowerShell 7.6.1 LTS
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -103,7 +103,7 @@ param (
 )
 
 # --- GLOBAL VERSION DEFINITION ---
-$scriptVersion = "2026.05.21__23.23.00"
+$scriptVersion = "2026.05.22__09.16.00"
 
 # --- VERSION REPORTER ---
 if ($Version) {
@@ -1661,8 +1661,11 @@ foreach ($folderPath in $targetFolders) {
                         
                         # Tiered Language Scoring
                         $isPrefLang = ($trackLang -eq $fixerConfig.Subtitles.PreferredLanguage)
-                        # Special Case: treat 'enm' as 'eng' ONLY if Honorifics mode is active
-                        if (-not $isPrefLang -and $Honorifics -and $fixerConfig.Subtitles.PreferredLanguage -eq "eng" -and $trackLang -eq "enm") {
+                         # Special Case: treat 'enm' or name-match as 'eng' ONLY if Honorifics mode is active
+                         # Uses Negative Lookbehind to avoid matching "No-Honorifics" or "Non-Honorifics"
+                        $honRegex = "(?<!no\s|non-|without\s|removed\s)(honorifics|honors)"
+                        $isHonorificsTrack = ($trackLang -eq "enm") -or ($trackName -match $honRegex)
+                        if (-not $isPrefLang -and $Honorifics -and $fixerConfig.Subtitles.PreferredLanguage -eq "eng" -and $isHonorificsTrack) {
                             $isPrefLang = $true
                         }
 
@@ -1809,15 +1812,18 @@ foreach ($folderPath in $targetFolders) {
                     $currentWinnerData = $currentGroup.Json.tracks | Where-Object { $_.id -eq $winner.ID }
                     
                     # 1. Validation Logic
-                    # PROTECTION: Only change language label if it's currently Undefined
-                    # OR if it's 'enm' and target is 'eng' (improves player compatibility).
-                    $langNeedsFix = ($currentWinnerData.properties.language -eq "und") -or
-                                    ($currentWinnerData.properties.language -eq "enm" -and $targetSubLang -eq "eng")
+                    # Determine the "Correct" target language for this specific winner
+                    # If it's an honorifics track, we standardize to 'enm'. Otherwise, use the user preference.
+                    $honRegex = "(?<!no\s|non-|without\s|removed\s)(honorifics|honors)"
+                    $isWinnerHon = ($winner.Name -match $honRegex) -or ($winner.Lang -eq "enm")
+                    $correctLangForWinner = if ($isWinnerHon) { "enm" } else { $targetSubLang }
                     
-                    # PREFERRED OR NOTHING: Only set default if Lang matches target OR is being promoted (und/enm)
-                    $isWinnerValidForDefault = ($winner.Lang -eq $targetSubLang) -or 
-                                               ($winner.Lang -eq "und") -or 
-                                               ($winner.Lang -eq "enm" -and $targetSubLang -eq "eng")
+                    # PROTECTION: Change label if current doesn't match Correct AND it's a "promotable" source (und/enm/name-match)
+                    $langNeedsFix = ($currentWinnerData.properties.language -ne $correctLangForWinner) -and 
+                                    (($currentWinnerData.properties.language -eq "und") -or $isWinnerHon)
+                    
+                    # PREFERRED OR NOTHING: Only set default if Lang matches target OR is an honorifics variant
+                    $isWinnerValidForDefault = ($winner.Lang -eq $targetSubLang) -or ($winner.Lang -eq "und") -or $isWinnerHon
 
                     $targetDefaultValue = if ($isWinnerValidForDefault) { 1 } else { 0 }
                     
@@ -1857,9 +1863,9 @@ foreach ($folderPath in $targetFolders) {
                     $logActions = "SET_DEFAULT=$targetDefaultValue"
                     
                     if ($langNeedsFix) {
-                            $Params += @('--set', "language=$targetSubLang")
-                            $logActions += " | SET_LANG=$targetSubLang"
-                    }
+                            $Params += @('--set', "language=$correctLangForWinner")
+                            $logActions += " | SET_LANG=$correctLangForWinner"
+                        }
                         
                     if (-not $isWinnerValidForDefault) { $subReason = "Preferred Lang Not Found (Setting All Defaults to 0)" }
                         [void]$fixDetails.Add("  ACTION: $logActions | TRACK: $winID | REASON: $subReason")
