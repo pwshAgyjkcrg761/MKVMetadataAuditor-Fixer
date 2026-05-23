@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: MKVMetadataAuditor+Fixer.ps1
-# VERSION: 2026.05.23__14.34.50
+# VERSION: 2026.05.23__17.28.00
 # TARGET: PowerShell 7.6.1 LTS
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -103,7 +103,7 @@ param (
 )
 
 # --- GLOBAL VERSION DEFINITION ---
-$scriptVersion = "2026.05.23__14.34.50"
+$scriptVersion = "2026.05.23__17.28.00"
 
 # --- VERSION REPORTER ---
 if ($Version) {
@@ -1322,8 +1322,8 @@ foreach ($folderPath in $targetFolders) {
             if ($null -ne $compareJson) {
                 $pTrack = $compareJson.tracks | Where-Object { $_.id -eq $t.id }
                 if ($null -ne $pTrack) {
-                    $pSig = "$($pTrack.id)|$($pTrack.type)|$($pTrack.properties.language)|$($pTrack.properties.default_track)|$($pTrack.properties.track_name)"
-                    $cSig = "$($t.id)|$($t.type)|$($t.properties.language)|$($t.properties.default_track)|$($t.properties.track_name)"
+                    $pSig = "$($pTrack.id)|$($pTrack.type)|$($pTrack.codec)|$($pTrack.properties.language)|$($pTrack.properties.default_track)|$($pTrack.properties.track_name)"
+                    $cSig = "$($t.id)|$($t.type)|$($t.codec)|$($t.properties.language)|$($t.properties.default_track)|$($t.properties.track_name)"
                     if ($pSig -ne $cSig) { $isDiff = $true }
                 }
             }
@@ -1479,10 +1479,21 @@ foreach ($folderPath in $targetFolders) {
                 if ($reasons -eq "") {
                     $entry.Add("REASON: 💎[Reference Only]")
                 } else {
-                    $entry.Add("REASON: $reasons")
+                    # Split only on spaces that follow a closing bracket
+                    $reasonParts = [regex]::Split($reasons, "(?<=\])\s")
+                    $currentReasonLine = "REASON: "
+                    foreach ($rPart in $reasonParts) {
+                        if (($currentReasonLine + " " + $rPart).Length -gt 90 -and $currentReasonLine -ne "REASON: ") {
+                            $entry.Add($currentReasonLine)
+                            $currentReasonLine = "        " + $rPart # Indent wrapped lines
+                        } else {
+                            $currentReasonLine = if ($currentReasonLine -eq "REASON: ") { $currentReasonLine + $rPart } else { $currentReasonLine + " " + $rPart }
+                        }
+                    }
+                    $entry.Add($currentReasonLine)
                 }
                 
-                $matchStatus = if ($mismatches -eq 0) { 
+                $matchStatus = if ($mismatches -eq 0) {
                     "✔+++All Files in Folder Match: YES ($($mkvFiles.Count))+++✔" 
                 } else { 
                     "❌+++All Files in Folder Match: NO (0)+++❌" 
@@ -1497,7 +1508,17 @@ foreach ($folderPath in $targetFolders) {
                 if ($reasons -eq "") {
                     $entry.Add("REASON: 💎[Reference Only]")
                 } else {
-                    $entry.Add("REASON: $reasons")
+                    $reasonParts = [regex]::Split($reasons, "(?<=\])\s")
+                    $currentReasonLine = "REASON: "
+                    foreach ($rPart in $reasonParts) {
+                        if (($currentReasonLine + " " + $rPart).Length -gt 90 -and $currentReasonLine -ne "REASON: ") {
+                            $entry.Add($currentReasonLine)
+                            $currentReasonLine = "        " + $rPart
+                        } else {
+                            $currentReasonLine = if ($currentReasonLine -eq "REASON: ") { $currentReasonLine + $rPart } else { $currentReasonLine + " " + $rPart }
+                        }
+                    }
+                    $entry.Add($currentReasonLine)
                 }
                 
             } 
