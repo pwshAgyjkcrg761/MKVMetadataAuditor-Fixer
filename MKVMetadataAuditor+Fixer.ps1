@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: MKVMetadataAuditor+Fixer.ps1
-# VERSION: 2026.05.23__08.08.00
+# VERSION: 2026.05.23__14.34.50
 # TARGET: PowerShell 7.6.1 LTS
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -103,7 +103,7 @@ param (
 )
 
 # --- GLOBAL VERSION DEFINITION ---
-$scriptVersion = "2026.05.23__08.08.00"
+$scriptVersion = "2026.05.23__14.34.50"
 
 # --- VERSION REPORTER ---
 if ($Version) {
@@ -1448,15 +1448,16 @@ foreach ($folderPath in $targetFolders) {
             
             # --- PATH WRAPPING LOGIC (90 CHAR LIMIT) ---
             $headerPrefix = if ($isPrimary) { "--- $label [$shortName] MKV AUDIT: " } else { "--- $label [$shortName] +MISMATCHED+ MKV: " }
-            $dirPath = (Split-Path $repFile.FullName -Parent) + "\"
-            $pathParts = $dirPath.Split('\', [System.StringSplitOptions]::RemoveEmptyEntries)
+            
+            # Split the full path including the filename
+            $pathParts = $repFile.FullName.Split('\', [System.StringSplitOptions]::RemoveEmptyEntries)
             
             $wrappedPathLines = New-Object System.Collections.Generic.List[string]
             $currentLine = $headerPrefix
 
             for ($i = 0; $i -lt $pathParts.Count; $i++) {
-                # Add backslash to each segment except the drive letter (which usually includes it)
-                $segment = if ($pathParts[$i] -match ":$") { $pathParts[$i] + "\" } else { $pathParts[$i] + "\" }
+                # Add a backslash to every segment EXCEPT the last one (the filename)
+                $segment = if ($i -eq ($pathParts.Count - 1)) { $pathParts[$i] } else { $pathParts[$i] + "\" }
                 
                 # Check if adding this segment exceeds 90 characters
                 if (($currentLine + $segment).Length -gt 90 -and $currentLine -ne $headerPrefix) {
@@ -1466,7 +1467,7 @@ foreach ($folderPath in $targetFolders) {
                     $currentLine += $segment
                 }
             }
-            # Close out the last line
+            # Close out the last line with the footer dashes
             $currentLine = $currentLine.TrimEnd() + " ---"
             $wrappedPathLines.Add($currentLine)
             
