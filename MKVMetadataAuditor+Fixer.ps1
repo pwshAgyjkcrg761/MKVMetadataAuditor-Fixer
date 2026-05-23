@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: MKVMetadataAuditor+Fixer.ps1
-# VERSION: 2026.05.23__17.28.00
+# VERSION: 2026.05.23__17.51.00
 # TARGET: PowerShell 7.6.1 LTS
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -103,7 +103,7 @@ param (
 )
 
 # --- GLOBAL VERSION DEFINITION ---
-$scriptVersion = "2026.05.23__17.28.00"
+$scriptVersion = "2026.05.23__17.51.00"
 
 # --- VERSION REPORTER ---
 if ($Version) {
@@ -1449,6 +1449,8 @@ foreach ($folderPath in $targetFolders) {
             # --- PATH WRAPPING LOGIC (90 CHAR LIMIT) ---
             $headerPrefix = if ($isPrimary) { "--- $label [$shortName] MKV AUDIT: " } else { "--- $label [$shortName] +MISMATCHED+ MKV: " }
             
+            $isUNC = $repFile.FullName.StartsWith("\\")
+            
             # Split the full path including the filename
             $pathParts = $repFile.FullName.Split('\', [System.StringSplitOptions]::RemoveEmptyEntries)
             
@@ -1458,6 +1460,9 @@ foreach ($folderPath in $targetFolders) {
             for ($i = 0; $i -lt $pathParts.Count; $i++) {
                 # Add a backslash to every segment EXCEPT the last one (the filename)
                 $segment = if ($i -eq ($pathParts.Count - 1)) { $pathParts[$i] } else { $pathParts[$i] + "\" }
+                
+                # Manual fix for UNC paths (re-inject leading \\ to the first segment)
+                if ($i -eq 0 -and $isUNC) { $segment = "\\" + $segment }
                 
                 # Check if adding this segment exceeds 90 characters
                 if (($currentLine + $segment).Length -gt 90 -and $currentLine -ne $headerPrefix) {
