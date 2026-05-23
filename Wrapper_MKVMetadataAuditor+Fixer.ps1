@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: Wrapper_MKVMetadataAuditor+Fixer.ps1
-# VERSION: 2026.05.22__19.59.37
+# VERSION: 2026.05.23__08.28.32
 # TARGET: PowerShell 7.6.1 LTS
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -76,11 +76,13 @@ switch ($true) {
 
 # Clean and sanitize all incoming folder paths into a comma-separated string block
 $cleanedPaths = @()
-foreach ($folder in $RemainingArgs) {
-    $path = $folder.Trim().Trim('"')
+foreach ($item in $RemainingArgs) {
+    $path = $item.Trim().Trim('"')
     if ($path) {
-        # Wrap each individual path in single quotes to protect spaces and brackets
-        $cleanedPaths += "'$path'"
+        # Escape single quotes (apostrophes) by doubling them up, then wrap in single quotes
+        # This prevents paths like "90's Hits" from breaking the PowerShell command string
+        $escapedPath = $path.Replace("'", "''")
+        $cleanedPaths += "'$escapedPath'"
     }
 }
 
@@ -89,11 +91,16 @@ $pathArrayString = $cleanedPaths -join ","
 
 # Build the execution block for the single tab
 $innerCmd = "& 'C:\scripts\MKVMetadataAuditor+Fixer.ps1'"
+
+if ($pathArrayString) {
+    # If the sub-script uses a specific parameter for input, use it here (e.g., -Path $pathArrayString)
+    # Otherwise, passing it immediately after the script call ensures it is the first positional argument.
+    $innerCmd += " $pathArrayString"
+}
+
 if ($profileFlags) {
     $innerCmd += " $profileFlags"
 }
-# Append the array of paths directly to the command call
-$innerCmd += " $pathArrayString"
 
 # Construct the single Windows Terminal execution argument string
 $rawArguments = "-w 0 nt -- `"C:\Tools\ps-port\pwsh.exe`" -NoProfile -ExecutionPolicy Bypass -NoExit -Command `"$innerCmd`""
