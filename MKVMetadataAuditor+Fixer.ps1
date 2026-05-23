@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: MKVMetadataAuditor+Fixer.ps1
-# VERSION: 2026.05.22__09.47.00
+# VERSION: 2026.05.23__08.08.00
 # TARGET: PowerShell 7.6.1 LTS
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -103,7 +103,7 @@ param (
 )
 
 # --- GLOBAL VERSION DEFINITION ---
-$scriptVersion = "2026.05.22__09.47.00"
+$scriptVersion = "2026.05.23__08.08.00"
 
 # --- VERSION REPORTER ---
 if ($Version) {
@@ -1101,11 +1101,11 @@ function Get-AuditFlags($tracks, $IsWestern) {
 }
 
 function Get-TrackProps($t) {
-    $p = ""
-    if ($t.properties.default_track) { $p += "[DEFAULT]" }
-    if ($t.properties.forced_track) { $p += "[FORCED]" }
-    if ($t.properties.flag_hearing_impaired) { $p += "[HI/CC]" }
-    return $p
+    $flags = New-Object System.Collections.Generic.List[string]
+    if ($t.properties.default_track) { [void]$flags.Add("[DEFAULT]") }
+    if ($t.properties.forced_track) { [void]$flags.Add("[FORCED]") }
+    if ($t.properties.flag_hearing_impaired) { [void]$flags.Add("[HI/CC]") }
+    return $flags
 }
 
 function Get-HeaderBlock($codecPadding, $propPadding, $namePadding) {
@@ -1330,9 +1330,20 @@ foreach ($folderPath in $targetFolders) {
 
             $idStr = if ($isDiff) { ">>>ID:$($t.id)<<<" } else { "   ID:$($t.id)" }
             $codec = "$($t.codec.PadRight($codecPadding))"
-            $props = (Get-TrackProps $t).PadRight($propPadding)
             $tName = if ($t.properties.track_name) { $t.properties.track_name } else { "" }
-            $entry.Add("$codec | $($idStr.PadRight(12)) | $($sel.PadRight(4)) | $($t.type.PadRight(9)) | $($t.properties.language) | $props | $($tName.PadRight($namePadding))")
+
+            $flags = @(Get-TrackProps $t) # Force to array to handle single-item returns
+            $firstFlag = if ($flags.Count -gt 0) { [string]$flags[0] } else { "" }
+            
+            # Print primary track info row
+            $entry.Add("$codec | $($idStr.PadRight(12)) | $($sel.PadRight(4)) | $($t.type.PadRight(9)) | $($t.properties.language) | $(($firstFlag).PadRight($propPadding)) | $($tName.PadRight($namePadding))")
+
+            # Stack additional flags on subsequent lines if they exist
+            if ($flags.Count -gt 1) {
+                for ($i = 1; $i -lt $flags.Count; $i++) {
+                    $entry.Add("$(" ".PadRight($codecPadding)) | $(" ".PadRight(12)) | $(" ".PadRight(4)) | $(" ".PadRight(9)) |     | $([string]($flags[$i]).PadRight($propPadding)) | $(" ".PadRight($namePadding))")
+                }
+            }
         }
         $entry.Add($line)
     }
@@ -1435,8 +1446,32 @@ foreach ($folderPath in $targetFolders) {
             $shortName = if ($repFile.Name.Length -gt 40) { $repFile.Name.Substring(0, 40) } else { $repFile.Name }
             
             
+            # --- PATH WRAPPING LOGIC (90 CHAR LIMIT) ---
+            $headerPrefix = if ($isPrimary) { "--- $label [$shortName] MKV AUDIT: " } else { "--- $label [$shortName] +MISMATCHED+ MKV: " }
+            $dirPath = (Split-Path $repFile.FullName -Parent) + "\"
+            $pathParts = $dirPath.Split('\', [System.StringSplitOptions]::RemoveEmptyEntries)
+            
+            $wrappedPathLines = New-Object System.Collections.Generic.List[string]
+            $currentLine = $headerPrefix
+
+            for ($i = 0; $i -lt $pathParts.Count; $i++) {
+                # Add backslash to each segment except the drive letter (which usually includes it)
+                $segment = if ($pathParts[$i] -match ":$") { $pathParts[$i] + "\" } else { $pathParts[$i] + "\" }
+                
+                # Check if adding this segment exceeds 90 characters
+                if (($currentLine + $segment).Length -gt 90 -and $currentLine -ne $headerPrefix) {
+                    $wrappedPathLines.Add($currentLine)
+                    $currentLine = $segment
+                } else {
+                    $currentLine += $segment
+                }
+            }
+            # Close out the last line
+            $currentLine = $currentLine.TrimEnd() + " ---"
+            $wrappedPathLines.Add($currentLine)
+            
             if ($isPrimary) {
-                $entry.Add("--- $label [$shortName] MKV AUDIT: $($repFile.FullName) ---")
+                foreach ($line in $wrappedPathLines) { $entry.Add($line) }
                 $entry.Add("FILE NAME: $($repFile.Name)")
                 # If there are NO audit flags, it is Reference Only.
                 # If there ARE flags, show only the flags and drop the Reference label.
@@ -1454,7 +1489,7 @@ foreach ($folderPath in $targetFolders) {
                 $entry.Add($matchStatus)
             } else {
                 # Mismatched Header (Secondary 02+)
-                $entry.Add("--- $label [$shortName] +MISMATCHED+ MKV: $($repFile.FullName) ---")
+                foreach ($line in $wrappedPathLines) { $entry.Add($line) }
                 $entry.Add("Primary: $($primaryGroup.Files[0].Name)")
                 
                 # Updated to show Reference Only for Secondary groups too
