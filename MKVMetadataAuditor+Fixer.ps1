@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: MKVMetadataAuditor+Fixer.ps1
-# VERSION: 2026.05.23__17.51.00
+# VERSION: 2026.05.24__15.48.45
 # TARGET: PowerShell 7.6.1 LTS
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -103,7 +103,7 @@ param (
 )
 
 # --- GLOBAL VERSION DEFINITION ---
-$scriptVersion = "2026.05.23__17.51.00"
+$scriptVersion = "2026.05.24__15.48.45"
 
 # --- VERSION REPORTER ---
 if ($Version) {
@@ -1086,7 +1086,7 @@ function Get-AuditFlags($tracks, $IsWestern) {
         
         if ($subs.Count -gt 0) {
             $dSubs = $subs | Where-Object { $_.properties.default_track }
-            if ($dSubs | Where-Object { $_.properties.track_name -match "Signs|Songs|Lyrics|Forced" -and $_.properties.track_name -notmatch "Dialogue" }) { $reasons += "🎵[Sub: Signs/Songs Default] " }
+            if ($dSubs | Where-Object { $_.properties.track_name -match "Sign|Song|Lyric|Forced" -and $_.properties.track_name -notmatch "Dialogue" }) { $reasons += "🎵[Sub: Signs/Songs Default] " }
             if ($jpnAud -and -not ($subs | Where-Object { $_.properties.language -eq "eng" -and $_.properties.default_track })) { $reasons += "🔇[No ENG Sub Default] " }
             
             # HI/CC Checks
@@ -1710,13 +1710,13 @@ foreach ($folderPath in $targetFolders) {
                         
                         } 
                         
-                        if ($trackName -match "Signs|Songs|Lyrics|English Audio|Partial|Forced") { 
+                        if ($trackName -match "Sign|Song|Lyric|English Audio|Partial|Forced") { 
                             $score -= 200 # Heavy penalty
                             [void]$ruleLog.Add("SignsSongs(-200)")
                         
                         } 
                         
-                        if ($Honorifics -and (($trackName -match "honorifics|honors") -or ($trackLang -eq "enm"))) { 
+                        if ($Honorifics -and (($trackName -match "honorific|honor") -or ($trackLang -eq "enm"))) { 
                             $score += 300 
                             [void]$ruleLog.Add("Honorifics(+300)")
                         }
@@ -1764,7 +1764,7 @@ foreach ($folderPath in $targetFolders) {
                         # --- Western "Full Sub" Tie-Breaker ---
                         if ($Western -and -not $sdhWinner) {
                             # Dynamically verify against the profile language preference instead of hardcoded 'eng'
-                            if ($trackLang -eq $fixerConfig.Subtitles.PreferredLanguage -and -not $t.properties.forced_track -and $trackName -notmatch "Signs|Songs|Lyrics") {
+                            if ($trackLang -eq $fixerConfig.Subtitles.PreferredLanguage -and -not $t.properties.forced_track -and $trackName -notmatch "Sign|Song|Lyric") {
                                 $score += 200 
                                 [void]$ruleLog.Add("WesternFullSub(+200)")
                             }
