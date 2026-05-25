@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: MKVMetadataAuditor+Fixer.ps1
-# VERSION: 2026.05.25__11.20.00
+# VERSION: 2026.05.25__14.28.00
 # TARGET: PowerShell 7.6.1 LTS
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -103,7 +103,7 @@ param (
 )
 
 # --- GLOBAL VERSION DEFINITION ---
-$scriptVersion = "2026.05.25__11.20.00"
+$scriptVersion = "2026.05.25__14.28.00"
 
 # --- VERSION REPORTER ---
 if ($Version) {
@@ -1118,7 +1118,7 @@ function Get-AuditFlags($tracks, $IsWestern) {
         
         if ($subs.Count -gt 0) {
             $dSubs = $subs | Where-Object { $_.properties.default_track }
-            if ($dSubs | Where-Object { $_.properties.track_name -match "Sign|Song|Lyric|Forced" -and $_.properties.track_name -notmatch "Dialogue" }) { $reasons += "🎵[Sub: Signs/Songs Default] " }
+            if ($dSubs | Where-Object { $_.properties.track_name -match "Sign|Song|Lyric|Forced|Translation Only" -and $_.properties.track_name -notmatch "Dialogue" }) { $reasons += "🎵[Sub: Signs/Songs Default] " }
             
             # HI/CC Checks
             if ($subs | Where-Object { $_.properties.language -eq "eng" -and $_.properties.flag_hearing_impaired }) { $reasons += "👂[ENG Sub HI/CC] " }
@@ -1741,7 +1741,7 @@ foreach ($folderPath in $targetFolders) {
                         
                         } 
                         
-                        if ($trackName -match "Sign|Song|Lyric|English Audio|Partial|Forced") { 
+                        if ($trackName -match "Sign|Song|Lyric|English Audio|Partial|Forced|Translation Only") { 
                             $score -= 200 # Heavy penalty
                             [void]$ruleLog.Add("SignsSongs(-200)")
                         
