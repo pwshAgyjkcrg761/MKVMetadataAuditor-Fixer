@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: MKVMetadataAuditor+Fixer.ps1
-# VERSION: 2026.05.24__15.48.45
+# VERSION: 2026.05.25__09.43.32
 # TARGET: PowerShell 7.6.1 LTS
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -103,7 +103,7 @@ param (
 )
 
 # --- GLOBAL VERSION DEFINITION ---
-$scriptVersion = "2026.05.24__15.48.45"
+$scriptVersion = "2026.05.25__09.43.32"
 
 # --- VERSION REPORTER ---
 if ($Version) {
@@ -1023,6 +1023,39 @@ function Get-AuditFlags($tracks, $IsWestern) {
     $engAud = $tracks | Where-Object { $_.type -eq "audio" -and $_.properties.language -eq "eng" }
     $subs = $tracks | Where-Object { $_.type -eq "subtitles" }
     
+    # --- PREFERRED AUDIO CHECK ---
+    # Matches the Fixer logic: checks config first, then falls back to mode defaults
+    $prefAudLang = if ($fixerConfig.Audio.PreferredLanguage) { $fixerConfig.Audio.PreferredLanguage } elseif ($IsWestern) { "eng" } else { "jpn" }
+    
+    if (-not ($tracks | Where-Object { $_.type -eq "audio" -and $_.properties.language -eq $prefAudLang })) { 
+        $reasons += "🚫🎙️[Pref Audio NOT Found: $($prefAudLang.ToUpper())] " 
+    }
+
+    # --- PREFERRED SUBTITLE CHECK ---
+    $prefSubLang = if ($fixerConfig.Subtitles.PreferredLanguage) { $fixerConfig.Subtitles.PreferredLanguage } elseif (-not $IsWestern) { "eng" }
+    
+    if ($prefSubLang -and -not ($subs | Where-Object { $_.properties.language -eq $prefSubLang })) {
+        # Honorifics fallback: If the winner is 'enm' and the target is 'eng', we don't flag it as missing
+        if (-not ($Honorifics -and $prefSubLang -eq "eng" -and ($subs | Where-Object { $_.properties.language -eq "enm" }))) {
+            $reasons += "❌👁️ [Pref Subtitles NOT Found: $($prefSubLang.ToUpper())] "
+        }
+    }
+    
+        # --- PREFERRED DEFAULT STATUS CHECK ---
+    $targetAuds = $tracks | Where-Object { $_.type -eq "audio" -and $_.properties.language -eq $prefAudLang }
+    if ($targetAuds -and -not ($targetAuds | Where-Object { $_.properties.default_track })) {
+        $reasons += "⚠️🎙️[Pref Audio NOT Default: $($prefAudLang.ToUpper())] "
+    }
+
+    $targetSubs = $subs | Where-Object { $_.properties.language -eq $prefSubLang }
+    # Special Check: In Honorifics mode, allow 'enm' to count as the default 'eng' choice
+    if ($Honorifics -and $prefSubLang -eq "eng") {
+        $targetSubs = $subs | Where-Object { $_.properties.language -match "eng|enm" }
+    }
+    if ($targetSubs -and -not ($targetSubs | Where-Object { $_.properties.default_track })) {
+        $reasons += "⚠️👁️[Pref Subtitles NOT Default: $($prefSubLang.ToUpper())] "
+    }
+    
     # --- AVC HIGH 10 PROFILE CHECK ---
     $vTrack = $tracks | Where-Object { $_.type -eq "video" } | Select-Object -First 1
     if ($null -ne $vTrack) {
@@ -1081,13 +1114,11 @@ function Get-AuditFlags($tracks, $IsWestern) {
         }
     } else {
         # ANIME MODE FLAGS (Includes your specific HI/CC and Signs/Songs logic)
-        if ($jpnAud -and -not ($jpnAud | Where-Object { $_.properties.default_track })) { $reasons += "🎙[JPN Audio Not Default] " }
         if ($jpnAud -and $subs.Count -eq 0) { $reasons += "⚠️[JPN Audio/No Subs] " }
         
         if ($subs.Count -gt 0) {
             $dSubs = $subs | Where-Object { $_.properties.default_track }
             if ($dSubs | Where-Object { $_.properties.track_name -match "Sign|Song|Lyric|Forced" -and $_.properties.track_name -notmatch "Dialogue" }) { $reasons += "🎵[Sub: Signs/Songs Default] " }
-            if ($jpnAud -and -not ($subs | Where-Object { $_.properties.language -eq "eng" -and $_.properties.default_track })) { $reasons += "🔇[No ENG Sub Default] " }
             
             # HI/CC Checks
             if ($subs | Where-Object { $_.properties.language -eq "eng" -and $_.properties.flag_hearing_impaired }) { $reasons += "👂[ENG Sub HI/CC] " }
