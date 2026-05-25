@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: MKVMetadataAuditor+Fixer.ps1
-# VERSION: 2026.05.25__09.43.32
+# VERSION: 2026.05.25__11.20.00
 # TARGET: PowerShell 7.6.1 LTS
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -103,7 +103,7 @@ param (
 )
 
 # --- GLOBAL VERSION DEFINITION ---
-$scriptVersion = "2026.05.25__09.43.32"
+$scriptVersion = "2026.05.25__11.20.00"
 
 # --- VERSION REPORTER ---
 if ($Version) {
@@ -1747,16 +1747,20 @@ foreach ($folderPath in $targetFolders) {
                         
                         } 
                         
-                        if ($Honorifics -and (($trackName -match "honorific|honor") -or ($trackLang -eq "enm"))) { 
-                            $score += 300 
-                            [void]$ruleLog.Add("Honorifics(+300)")
+                        if ($Honorifics) {
+                            # Negative lookbehind: Only match if NOT preceded by no, non-, without, or removed
+                            $honMatchRegex = "(?<!no\s|non-|without\s|removed\s|no-)(honorific|honor)"
+                            if (($trackName -match $honMatchRegex) -or ($trackLang -eq "enm")) { 
+                                $score += 300 
+                                [void]$ruleLog.Add("Honorifics(+300)")
+                            }
                         }
                         
                         # Tiered Language Scoring
                         $isPrefLang = ($trackLang -eq $fixerConfig.Subtitles.PreferredLanguage)
                          # Special Case: treat 'enm' or name-match as 'eng' ONLY if Honorifics mode is active
                          # Uses Negative Lookbehind to avoid matching "No-Honorifics" or "Non-Honorifics"
-                        $honRegex = "(?<!no\s|non-|without\s|removed\s)(honorifics|honors)"
+                        $honRegex = "(?<!no\s|non-|without\s|removed\s|no-)(honorific|honor)"
                         $isHonorificsTrack = ($trackLang -eq "enm") -or ($trackName -match $honRegex)
                         if (-not $isPrefLang -and $Honorifics -and $fixerConfig.Subtitles.PreferredLanguage -eq "eng" -and $isHonorificsTrack) {
                             $isPrefLang = $true
