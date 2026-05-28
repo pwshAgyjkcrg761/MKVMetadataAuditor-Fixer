@@ -1,7 +1,7 @@
 # ==============================================================================
 # SCRIPT: MKVMetadataAuditor+Fixer.ps1
-# VERSION: 2026.05.27__15.30.48
-# TARGET: PowerShell 7.6.1 LTS
+# VERSION: 2026.05.28__13.39.18
+# TARGET: PowerShell 7.6.2 LTS
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
 # 
@@ -103,7 +103,7 @@ param (
 )
 
 # --- GLOBAL VERSION DEFINITION ---
-$scriptVersion = "2026.05.27__15.30.48"
+$scriptVersion = "2026.05.28__13.39.18"
 
 # --- VERSION REPORTER ---
 if ($Version) {
@@ -533,8 +533,8 @@ if ($missingTools.Count -gt 0) {
     Pause; exit
 }
 
-if ($PSVersionTable.PSVersion -lt [version]"7.6.1") {
-    Write-Host "ERROR: Running on version $($PSVersionTable.PSVersion). This script requires at least 7.6.1." -ForegroundColor DarkRed
+if ($PSVersionTable.PSVersion -lt [version]"7.6.2") {
+    Write-Host "ERROR: Running on version $($PSVersionTable.PSVersion). This script requires at least 7.6.2." -ForegroundColor DarkRed
     Pause; exit
 }
 
@@ -1118,7 +1118,7 @@ function Get-AuditFlags($tracks, $IsWestern) {
         
         if ($subs.Count -gt 0) {
             $dSubs = $subs | Where-Object { $_.properties.default_track }
-            if ($dSubs | Where-Object { $_.properties.track_name -match "Sign|Song|Lyric|Forced|Translation Only|ASSR" -and $_.properties.track_name -notmatch "Dialogue" }) { $reasons += "🎵[Sub: Signs/Songs Default] " }
+            if ($dSubs | Where-Object { $_.properties.track_name -match "Sign|Song|Lyric|Forced|Translation Only|ASSR|S&S|S\s&\sS|Dubtitle" -and $_.properties.track_name -notmatch "Dialog" }) { $reasons += "🎵[Sub: Signs/Songs Default] " }
             
             # HI/CC Checks
             if ($subs | Where-Object { $_.properties.language -eq "eng" -and $_.properties.flag_hearing_impaired }) { $reasons += "👂[ENG Sub HI/CC] " }
@@ -1735,13 +1735,13 @@ foreach ($folderPath in $targetFolders) {
                         }
                         
                         # Priority for Dialogue / Penalty for Signs & Songs
-                        if ($trackName -match "Dialogue|Full Sub|Full Dialogue|Japanese Audio") { 
+                        if ($trackName -match "Dialog|Full Sub|Full Dialog|Japanese Audio") { 
                             $score += 150 
                             [void]$ruleLog.Add("Dialogue(+150)")
                         
                         } 
                         
-                        if ($trackName -match "Sign|Song|Lyric|English Audio|Partial|Forced|Translation Only|ASSR") { 
+                        if ($trackName -match "Sign|Song|Lyric|English Audio|Partial|Forced|Translation Only|ASSR|S&S|S\s&\sS|Dubtitle") { 
                             $score -= 200 # Heavy penalty
                             [void]$ruleLog.Add("SignsSongs(-200)")
                         
