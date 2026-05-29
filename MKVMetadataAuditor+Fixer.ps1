@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: MKVMetadataAuditor+Fixer.ps1
-# VERSION: 2026.05.29__13.38.30
+# VERSION: 2026.05.29__18.31.25
 # TARGET: PowerShell 7.6.2 LTS
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -39,6 +39,11 @@ param (
     [switch]$Fix,        # Activates the Fixer module
     [switch]$FixDebug,
     [switch]$FixNoBackup,    # Disables the automatic 1-by-1 backup
+    
+    # Global Debugging Param
+    [alias("Dev", "DevD", "DBG", "DDBG")]
+    [switch]$DevDebug,
+    
     [Alias("nr")]
     [switch]$disableRecurse, # New flag to disable sub-directory scanning
     [switch]$DelLog,         # New flag to clear the logs folder
@@ -109,7 +114,7 @@ param (
 )
 
 # --- GLOBAL VERSION DEFINITION ---
-$scriptVersion = "2026.05.29__13.38.30"
+$scriptVersion = "2026.05.29__18.31.25"
 
 # --- VERSION REPORTER ---
 if ($Version) {
@@ -355,7 +360,7 @@ if ($Help -or $Manual) {
     "      list and reset preferences via command line.`n"
 )
 
-&$PrintManualBlock "  -DeepSubtitleAudit | -DSA | -Deep | -DeepAudit" @(
+    &$PrintManualBlock "  -DeepSubtitleAudit | -DSA | -Deep | -DeepAudit" @(
     "      Triggers an advanced audit for files containing exactly two unnamed text",
     "      subtitle tracks with matching codecs. If track headers are ambiguous,",
     "      it extracts the streams to analyze file size deltas, automatically",
@@ -451,15 +456,17 @@ if (($FixNoBackup -or $FixDebug) -and -not $Fix) {
     exit
 }
 
-# --- SEARCH FLAG RESTRICTION ---
-$searchOnlyFlags = @()
-if ($PSBoundParameters.ContainsKey('fast')) { $searchOnlyFlags += "-fast" }
-if ($PSBoundParameters.ContainsKey('AvcHigh10SearchDebug')) { $searchOnlyFlags += "-h10pDebug" }
-if ($PSBoundParameters.ContainsKey('LogFullPath')) { $searchOnlyFlags += "-lfp" }
+if ($DeepSubtitleAuditDebug -and -not $DeepSubtitleAudit) {
+    Write-Host "`n[ERROR] Modifier flag detected without -DeepSubtitleAudit." -ForegroundColor DarkRed
+    Write-Host "The -DeepSubtitleAuditDebug flag requires the -DeepSubtitleAudit switch to be active.`n" -ForegroundColor DarkYellow
+    exit
+}
 
-if ($searchOnlyFlags.Count -gt 0 -and -not $AvcHigh10Search) {
-    Write-Host "`n[ERROR] Search-specific flag(s) detected: $($searchOnlyFlags -join ', ')" -ForegroundColor DarkRed
-    Write-Host "The flags -fast, -h10pDebug, and -lfp require -h10p (AvcHigh10Search) to be active.`n" -ForegroundColor DarkYellow
+# --- SEARCH FLAG RESTRICTION ---
+#       Modified for Global Debug 
+if (($PSBoundParameters.ContainsKey('fast') -or $PSBoundParameters.ContainsKey('LogFullPath')) -and -not $AvcHigh10Search) {
+    Write-Host "`n[ERROR] Search-specific flag(s) detected." -ForegroundColor DarkRed
+    Write-Host "The flags -fast and -lfp require -h10p (AvcHigh10Search) to be active.`n" -ForegroundColor DarkYellow
     exit
 }
 
@@ -560,6 +567,15 @@ if ($missingTools.Count -gt 0) {
     Pause; exit
 }
 
+# [CHANGE] v2026.05.29__15.11.02 - Debug Tool Path Visibility
+if ($DevDebug) {
+    Write-Host "`n [DEBUG] Tool Discovery:" -ForegroundColor DarkYellow
+    Write-Host "  -> mkvmerge:    $mkvmerge" -ForegroundColor Gray
+    Write-Host "  -> mkvpropedit: $mkvpropedit" -ForegroundColor Gray
+    Write-Host "  -> mkvextract:  $mkvextract" -ForegroundColor Gray
+    Write-Host "  -> MediaInfo:   $mediainfo`n" -ForegroundColor Gray
+}
+
 if ($PSVersionTable.PSVersion -lt [version]"7.6.2") {
     Write-Host "ERROR: Running on version $($PSVersionTable.PSVersion). This script requires at least 7.6.2." -ForegroundColor DarkRed
     Pause; exit
@@ -632,7 +648,7 @@ if (-not (Test-Path $excludeFile)) {
       "# FORMAT: One path per line. No wildcards. No trailing slashes.",
       "# ",
       "# Example below this line. Remove the # to enable the line.",
-      "#B:\Media\Movies\Sample_Folder",
+      "# B:\Media\Movies\Sample_Folder",
       "") | Out-File $excludeFile -Encoding utf8
 }
 
@@ -828,7 +844,7 @@ if (Test-Path $configFile) {
 }
 
 # --- STARTUP DISPLAY ---
-Clear-Host
+if (-not $DevDebug) { Clear-Host }
 $uiversion = $scriptVersion
 
 # Determine Display Mode, Action, and Override Status
@@ -869,6 +885,13 @@ Write-Host "  Sub Codecs:   " -NoNewline; Write-Host "$($fixerConfig.Subtitles.C
 if ($SubtitleFactorTrackOrder) {
         Write-Host "  Track Order:  " -NoNewline; Write-Host "Active (-SFTO)" -ForegroundColor Cyan
     }
+if ($DeepSubtitleAudit) {
+    $dsaDisp = if ($DeepSubtitleAuditDebug -or $DevDebug) { "Active (-DSA) + Debug" } else { "Active (-DSA)" }
+    Write-Host "  Deep Audit:   " -NoNewline; Write-Host "$dsaDisp" -ForegroundColor Cyan
+}
+if ($DevDebug) {
+    Write-Host "  Global Debug: " -NoNewline; Write-Host "Active (-Dev)" -ForegroundColor DarkYellow
+}
 if ($Honorifics) {
     Write-Host "  Honorifics:   " -NoNewline; Write-Host "$(if ($Honorifics) { "On" } else { "Off" })" -ForegroundColor Blue
 }
@@ -1321,7 +1344,7 @@ foreach ($folderPath in $targetFolders) {
             
             # Write-Progress -Activity "Total Session Progress" -Status $statusMsg -PercentComplete $percent
             # If debugging, ensure we move to a new line so the bar remains visible
-            if ($AvcHigh10SearchDebug) { 
+            if ($AvcHigh10SearchDebug -or $DevDebug) { 
                 Write-Host "`n [DEBUG] Scanning: $($f.Name)" -ForegroundColor Gray 
             }
             if (Test-Path -LiteralPath $mediainfo) {
@@ -1456,7 +1479,19 @@ foreach ($folderPath in $targetFolders) {
             
             # 3. Get JSON and build signature
             $json = & $mkvmerge -J $f.FullName | ConvertFrom-Json
-            $sig = (($json.tracks | ForEach-Object { "$($_.id)|$($_.type)|$($_.codec)|$($_.properties.language)|$($_.properties.default_track)|$($_.properties.track_name)" }) -join "`n")
+            # [CHANGE] v2026.05.29__15.48.15 - Add Selector (Sel) to Audit Signature
+            Get-Selector -Reset
+            $sig = (($json.tracks | ForEach-Object { 
+                $p = $_.properties
+                $sel = Get-Selector $_.type
+                "$($_.id)|$sel|$($_.type)|$($_.codec)|$($p.language)|Def:$([bool]$p.default_track)|Frc:$([bool]$p.forced_track)|HI:$([bool]$p.flag_hearing_impaired)|$($p.track_name)" 
+            }) -join "`n")
+            
+            # [CHANGE] v2026.05.29__15.11.02 - Signature Debugging
+            if ($DevDebug) {
+                Write-Host "`n [DEBUG] Signature for: $($f.Name)" -ForegroundColor DarkCyan
+                $sig.Split("`n") | ForEach-Object { Write-Host "    $($_.Trim())" -ForegroundColor Gray }
+            }
             
             # --- SEPARATE AVC HIGH 10 SEARCH ---
             if ($AvcHigh10Search -and (Test-Path -LiteralPath $mediainfo)) {
@@ -1766,9 +1801,9 @@ foreach ($folderPath in $targetFolders) {
                                 $unnamed = $allSubs | Where-Object { 
                                     ($_.properties.language -match "eng|und|en") -and 
                                     ([string]::IsNullOrWhiteSpace($_.properties.track_name) -or $_.properties.track_name -eq "undefined") -and
-                                    ($_.codec -match "S_TEXT|UTF8|SRT|ASS|SSA|SubStation|SubRip")
+                                    ($_.codec -match "S_TEXT|UTF8|SRT|ASS|SSA|SubStationAlpha|SubRip")
                                 }
-                                if ($DeepSubtitleAuditDebug) { Write-Host "  [DSA] Discovery: Found $($unnamed.Count) unnamed text tracks in $($fToFix.Name)" -ForegroundColor Cyan }
+                                if ($DeepSubtitleAuditDebug -or $DevDebug) { Write-Host "  [DSA] Discovery: Found $($unnamed.Count) unnamed text tracks in $($fToFix.Name)" -ForegroundColor Cyan }
                                 $currentGroup | Add-Member -MemberType NoteProperty -Name $fileGuid -Value @{ "Tracks" = $unnamed; "Weights" = @{} } -Force
                             }
 
@@ -1776,55 +1811,128 @@ foreach ($folderPath in $targetFolders) {
                             $ambiguousTracks = $dsaCtx.Tracks
 
                             if ($ambiguousTracks.Count -eq 2) {
+                                # [CHANGE] v2026.05.29__17.06.12 - Hierarchical Fallback Probe (Headers -> Bytes -> Text)
                                 if ($dsaCtx.Weights.Count -eq 0) {
-                                    $w1 = 0; $w2 = 0
-                                    $w1 = if ($ambiguousTracks[0].properties.tag_number_of_frames) { [int64]$ambiguousTracks[0].properties.tag_number_of_frames } else { 0 }
-                                    $w2 = if ($ambiguousTracks[1].properties.tag_number_of_frames) { [int64]$ambiguousTracks[1].properties.tag_number_of_frames } else { 0 }
-
-                                    if ($w1 -eq 0 -and $w2 -eq 0) {
-                                        if ($DeepSubtitleAuditDebug) { Write-Host "  [DSA] Header stats missing. Extracting tracks..." -ForegroundColor DarkYellow }
-                                        $tempDir = Join-Path $env:TEMP "DSA_Probe"
-                                        if (-not (Test-Path $tempDir)) { New-Item -Path $tempDir -ItemType Directory | Out-Null }
-                                        $tmpFile1 = Join-Path $tempDir "track1.tmp"; $tmpFile2 = Join-Path $tempDir "track2.tmp"
-                                        & $mkvextract "$($fToFix.FullName)" tracks "$($ambiguousTracks[0].id):$tmpFile1" "$($ambiguousTracks[1].id):$tmpFile2" | Out-Null
-                                        if (Test-Path $tmpFile1) { $w1 = (Get-Item $tmpFile1).Length; Remove-Item $tmpFile1 }
-                                        if (Test-Path $tmpFile2) { $w2 = (Get-Item $tmpFile2).Length; Remove-Item $tmpFile2 }
+                                    $id1 = $ambiguousTracks[0].id; $id2 = $ambiguousTracks[1].id
+                                    $w1 = 0; $w2 = 0; $isResolved = $false
+                                    
+                                    # --- STAGE 1: HEADER PROBE ---
+                                    $targetRatio = 3.0 # Default strict threshold
+                                    $h1 = if ($ambiguousTracks[0].properties.tag_number_of_frames) { [int64]$ambiguousTracks[0].properties.tag_number_of_frames } else { 0 }
+                                    $h2 = if ($ambiguousTracks[1].properties.tag_number_of_frames) { [int64]$ambiguousTracks[1].properties.tag_number_of_frames } else { 0 }
+                                    
+                                    if ($h1 -gt 0 -and $h2 -gt 0) {
+                                        $hRatio = [Math]::Max($h1, $h2) / [Math]::Max(1, [Math]::Min($h1, $h2))
+                                        if ($hRatio -ge $targetRatio) {
+                                            if ($DeepSubtitleAuditDebug -or $DevDebug) { Write-Host "  [DSA] Header Probe SUCCESS (Ratio: $($hRatio.ToString('F2')))" -ForegroundColor Green }
+                                            $w1 = $h1; $w2 = $h2; $isResolved = $true
+                                        } elseif ($DeepSubtitleAuditDebug -or $DevDebug) {
+                                            Write-Host "  [DSA] Header ratio too low ($($hRatio.ToString('F2'))). Falling back to Extraction..." -ForegroundColor DarkYellow
+                                        }
                                     }
-                                    $dsaCtx.Weights[$ambiguousTracks[0].id] = $w1
-                                    $dsaCtx.Weights[$ambiguousTracks[1].id] = $w2
-                                    if ($DeepSubtitleAuditDebug) { Write-Host "  [DSA] Sizes Found -> ID:$($ambiguousTracks[0].id):$w1 bytes | ID:$($ambiguousTracks[1].id):$w2 bytes" -ForegroundColor Gray }
+
+                                    # --- STAGE 2: EXTRACTION PROBE (BYTES & TEXT) ---
+                                    if (-not $isResolved) {
+                                        $tempDir = Join-Path $env:TEMP "DSA_Probe"
+                                        if (Test-Path $tempDir) { Remove-Item $tempDir -Recurse -Force -ErrorAction SilentlyContinue }
+                                        New-Item -Path $tempDir -ItemType Directory | Out-Null
+                                        
+                                        $tmpFile1 = Join-Path $tempDir "track1.tmp"; $tmpFile2 = Join-Path $tempDir "track2.tmp"
+                                        & $mkvextract "$($fToFix.FullName)" tracks "$($id1):$tmpFile1" "$($id2):$tmpFile2" | Out-Null
+                                        
+                                        if (Test-Path $tmpFile1) {
+                                            # Sub-Stage 2A: Raw Byte Count
+                                            $b1 = (Get-Item $tmpFile1).Length; $b2 = (Get-Item $tmpFile2).Length
+                                            $bRatio = [Math]::Max($b1, $b2) / [Math]::Max(1, [Math]::Min($b1, $b2))
+                                            
+                                            if ($bRatio -ge $targetRatio) {
+                                                if ($DeepSubtitleAuditDebug -or $DevDebug) { Write-Host "  [DSA] Bitstream Probe SUCCESS (Ratio: $($bRatio.ToString('F2')))" -ForegroundColor Green }
+                                                $w1 = $b1; $w2 = $b2; $isResolved = $true
+                                            } else {
+                                                # Sub-Stage 2B: Text-Only Character Count (For SSA/ASS stylized ties)
+                                                if ($DeepSubtitleAuditDebug -or $DevDebug) { Write-Host "  [DSA] Bitstream ratio too low ($($bRatio.ToString('F2'))). Performing Text-Only Deep Probe..." -ForegroundColor DarkCyan }
+                                                
+                                                $ExtractDialogueText = {
+                                                    param($path, $outPath)
+                                                    $sb = New-Object System.Text.StringBuilder
+                                                    $content = Get-Content $path -Raw -Encoding utf8 -ErrorAction SilentlyContinue
+                                                    if ($content -match "[\u0000]") { $content = Get-Content $path -Raw -Encoding ansi }
+                                                    
+                                                    $lines = $content -split "`r?`n"
+                                                    foreach ($line in $lines) {
+                                                        if ($line -match "^(?:Dialogue|Comment):\s*[^,]*,") {
+                                                            if ($line -match "\\p[1-9]") { continue }
+                                                            $parts = $line -split ",", 10
+                                                            if ($parts.Count -eq 10) {
+                                                                $clean = $parts[9] -replace '\{.*?\}', '' -replace '\\[Nnh]', ' ' -replace '\d', '' -replace '[^\p{L}\s]', ''
+                                                                if ($clean.Trim().Length -gt 0) { [void]$sb.AppendLine($clean.Trim()) }
+                                                            }
+                                                        }
+                                                    }
+                                                    $final = $sb.ToString().Trim()
+                                                    $final | Out-File $outPath -Encoding utf8 
+                                                    return $final
+                                                }
+
+                                                $clean1 = &$ExtractDialogueText $tmpFile1 (Join-Path $tempDir "track1_cleaned.txt")
+                                                $clean2 = &$ExtractDialogueText $tmpFile2 (Join-Path $tempDir "track2_cleaned.txt")
+                                                
+                                                $tw1 = $clean1.Length; $tw2 = $clean2.Length
+                                                $tRatio = if ($tw1 -gt 0 -and $tw2 -gt 0) { [Math]::Max($tw1, $tw2) / [Math]::Max(1, [Math]::Min($tw1, $tw2)) } else { 0 }
+                                                
+                                                # RELAXED THRESHOLD ONLY FOR TEXT PROBE
+                                                if ($tRatio -ge 2.0) {
+                                                    if ($DeepSubtitleAuditDebug -or $DevDebug) { Write-Host "  [DSA] Text Probe SUCCESS (Ratio: $($tRatio.ToString('F2')))" -ForegroundColor Green }
+                                                    $w1 = $tw1; $w2 = $tw2; $isResolved = $true; $targetRatio = 2.0
+                                                }
+                                            }
+                                        }
+                                        
+                                        # Cleanup or Debug Inspection
+                                        if ($DevDebug) {
+                                            Write-Host "    [DEBUG] Final Weight ID:$id1 ($w1) | ID:$id2 ($w2)" -ForegroundColor Gray
+                                            Write-Host "    [DEBUG] Inspection Files: $tempDir" -ForegroundColor DarkCyan
+                                        } else {
+                                            if (Test-Path $tempDir) { Remove-Item $tempDir -Recurse -Force -ErrorAction SilentlyContinue }
+                                        }
+                                    }
+                                    
+                                    # Finalize Weights
+                                    $dsaCtx.Weights[$id1] = $w1; $dsaCtx.Weights[$id2] = $w2
+                                    $currentGroup | Add-Member -MemberType NoteProperty -Name ($fileGuid + "_Ratio") -Value $targetRatio -Force
                                 }
 
-                                $id1 = $ambiguousTracks[0].id; $id2 = $ambiguousTracks[1].id
-                                $w1 = $dsaCtx.Weights[$id1]; $w2 = $dsaCtx.Weights[$id2]
-
+                                # Decision Implementation
+                                $w1 = $dsaCtx.Weights[$ambiguousTracks[0].id]
+                                $w2 = $dsaCtx.Weights[$ambiguousTracks[1].id]
+                                $dynRatio = $currentGroup.PSObject.Properties[$fileGuid + "_Ratio"].Value
+                                
                                 if ($w1 -gt 0 -and $w2 -gt 0) {
-                                    $large = [Math]::Max($w1, $w2); $small = [Math]::Min($w1, $w2)
-                                    $ratio = $large / $small
-                                    $myWeight = $dsaCtx.Weights[$t.id]
-
-                                    if ($ratio -ge 3.0) {
+                                    $ratio = [Math]::Max($w1, $w2) / [Math]::Min($w1, $w2)
+                                    if ($ratio -ge $dynRatio) {
                                         $needsChange = $true
-                                        if ($myWeight -eq $large) {
+                                        if ($dsaCtx.Weights[$t.id] -eq [Math]::Max($w1, $w2)) {
                                             $trackName = "full dialogue"
                                             if ($Fix) { $Params += @('--edit', "track:$($t.id + 1)", '--set', "name=Full Dialogue") }
-                                            if ($DeepSubtitleAuditDebug) { Write-Host "  [DSA] SUCCESS: Identified Track $($t.id) as FULL DIALOGUE" -ForegroundColor Green }
+                                            if ($DeepSubtitleAuditDebug -or $DevDebug) { Write-Host "  [DSA] SUCCESS: Identified Track $($t.id) as FULL DIALOGUE" -ForegroundColor Green }
                                             [void]$fixDetails.Add("  [DSA] Identified Track $($t.id) as FULL DIALOGUE (Ratio: $($ratio.ToString('F2')))")
                                         } else {
                                             $trackName = "signs & songs"
                                             if ($Fix) { $Params += @('--edit', "track:$($t.id + 1)", '--set', "name=Signs & Songs") }
-                                            if ($DeepSubtitleAuditDebug) { Write-Host "  [DSA] SUCCESS: Identified Track $($t.id) as SIGNS & SONGS" -ForegroundColor DarkGreen }
+                                            if ($DeepSubtitleAuditDebug -or $DevDebug) { Write-Host "  [DSA] SUCCESS: Identified Track $($t.id) as SIGNS & SONGS" -ForegroundColor DarkGreen }
                                             [void]$fixDetails.Add("  [DSA] Identified Track $($t.id) as SIGNS & SONGS (Ratio: $($ratio.ToString('F2')))")
                                         }
-                                    } elseif ($DeepSubtitleAuditDebug) {
-                                        if ($t.id -eq $id1) { Write-Host "  [DSA] Ratio too low ($($ratio.ToString('F2'))). Skipping." -ForegroundColor Yellow }
+                                    } elseif ($DeepSubtitleAuditDebug -or $DevDebug) {
+                                        if ($t.id -eq $ambiguousTracks[0].id) { 
+                                            Write-Host "  [DSA] All probes failed. Ratio too low ($($ratio.ToString('F2'))). Skipping. (Counts: $w1 / $w2)" -ForegroundColor Yellow 
+                                        }
                                     }
-                                } elseif ($DeepSubtitleAuditDebug) {
-                                    if ($t.id -eq $id1) { Write-Host "  [DSA] FAILED: Could not determine sizes." -ForegroundColor Red }
+                                } elseif ($DeepSubtitleAuditDebug -or $DevDebug) {
+                                    if ($t.id -eq $ambiguousTracks[0].id) { Write-Host "  [DSA] FAILED: Could not determine sizes via any probe." -ForegroundColor Red }
                                 }
                             }
                         }
-                        # --- END DSA ENGINE ---
+                        # --- END DSA ENGINE --- 
                         
                         $trackLang = $t.properties.language.ToLower()
                         
@@ -1940,6 +2048,7 @@ foreach ($folderPath in $targetFolders) {
                         # 4. ADD TO LIST (No filter here - we need to see the "bad" tracks to fix them)
                         $subCandidates += [PSCustomObject]@{
                             ID         = $t.id
+                            Sel        = $sel
                             Score      = $score
                             Lang       = $trackLang
                             Name       = $t.properties.track_name
@@ -1969,11 +2078,12 @@ foreach ($folderPath in $targetFolders) {
                 } # <--- END TRACK LOOP
                 
                 # --- DEBUG: SCORING VISIBILITY ---
-                if ($FixDebug -and $subCandidates.Count -gt 0) {
+                if (($FixDebug -or $DevDebug) -and $subCandidates.Count -gt 0) {
                     Write-Host "  [DEBUG] Subtitle Scoring Candidates:" -ForegroundColor Cyan
                     [void]$fixDetails.Add("  [DEBUG] Subtitle Scoring Breakdown:")
                     foreach ($cand in ($subCandidates | Sort-Object Score -Descending)) {
-                        $msg = "    -> ID:$($cand.ID) | Score: $($cand.Score) | Lang: $($cand.Lang) | Rules: [$($cand.Rules)] | Name: $($cand.Name)"
+                        # [CHANGE] v2026.05.29__15.58.42 - Include Sel in scoring debug telemetry
+                        $msg = "    -> ID:$($cand.ID) | Sel:$($cand.Sel) | Score: $($cand.Score) | Lang: $($cand.Lang) | Rules: [$($cand.Rules)] | Name: $($cand.Name)"
                         Write-Host $msg -ForegroundColor Cyan
                         [void]$fixDetails.Add($msg)
                     }
@@ -2138,7 +2248,7 @@ foreach ($folderPath in $targetFolders) {
                     }
 
                     if ($targetFile -and (Test-Path -LiteralPath $targetFile)) {
-                        if ($FixDebug) {
+                        if ($FixDebug -or $DevDebug) {
                             $fullCmd = "mkvpropedit `"$targetFile`" $($Params -join ' ')"
                             Write-Host "  [DEBUG] $fullCmd" -ForegroundColor DarkYellow
                             [void]$fixDetails.Add("  DEBUG_CMD: $fullCmd")
