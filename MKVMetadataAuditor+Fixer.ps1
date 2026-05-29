@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: MKVMetadataAuditor+Fixer.ps1
-# VERSION: 2026.05.29__12.31.55
+# VERSION: 2026.05.29__13.38.30
 # TARGET: PowerShell 7.6.2 LTS
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -109,7 +109,7 @@ param (
 )
 
 # --- GLOBAL VERSION DEFINITION ---
-$scriptVersion = "2026.05.29__12.31.55"
+$scriptVersion = "2026.05.29__13.38.30"
 
 # --- VERSION REPORTER ---
 if ($Version) {
@@ -1241,6 +1241,39 @@ foreach ($folderPath in $targetFolders) {
         $currentPathClean = $folderPath.FullName.TrimEnd('\')
         if ($exclusions -contains $currentPathClean) {
             Write-Host " [SKIP] Folder excluded by rule: $($folderPath.Name)" -ForegroundColor DarkGray
+            
+            # [CHANGE] v2026.05.29__13.26.15 - Formatted Exclusion Block for Detail Log
+            $isUNC = $folderPath.FullName.StartsWith("\\")
+            $pathParts = $folderPath.FullName.Split('\', [System.StringSplitOptions]::RemoveEmptyEntries)
+            $border = "-" * 99
+            
+            $skipOutput = New-Object System.Collections.Generic.List[string]
+            $skipOutput.Add("") # Blank line before
+            $skipOutput.Add($border)
+            
+            $currentLine = "EXCLUDED PATH: '"
+            for ($i = 0; $i -lt $pathParts.Count; $i++) {
+                $segment = if ($i -eq ($pathParts.Count - 1)) { $pathParts[$i] } else { $pathParts[$i] + "\" }
+                if ($i -eq 0 -and $isUNC) { $segment = "\\" + $segment }
+                
+                # Wrap at 95 to allow for closing quote and safety margin
+                if (($currentLine + $segment).Length -gt 95 -and $currentLine -ne "EXCLUDED PATH: '") {
+                    $skipOutput.Add($currentLine)
+                    $currentLine = "                " + $segment # 16-space indent to align after ':'
+                } else {
+                    $currentLine += $segment
+                }
+            }
+            $currentLine += "'" # Close the path quote
+            $skipOutput.Add($currentLine)
+            $skipOutput.Add("") # Gap before message
+            $skipOutput.Add("This path was skipped because it is listed in MKVMetadataAuditor+Fixer__Excluded-Paths.txt.")
+            $skipOutput.Add($border)
+            $skipOutput.Add("") # Blank line after
+            $skipOutput.Add("") # Blank line after
+            
+            $skipOutput | Out-File $detailLog -Append -Encoding utf8
+            
             continue
         }
     }
