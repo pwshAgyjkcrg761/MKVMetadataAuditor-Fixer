@@ -1,5 +1,5 @@
 # MKVMetadataAuditor+Fixer
-**A high-fidelity media management and metadata enforcement suite for PowerShell 7.6.1 LTS.**
+**A high-fidelity media management and metadata enforcement suite for PowerShell 7.6.2 LTS.**
 
 ---
 
@@ -62,6 +62,8 @@ The script employs a dual-engine approach to process files—handling Anime and 
 | `-Honorifics \| -Hon` | Injects a **+300 score bonus** to tracks labeled 'honorifics' or 'enm'. |
 | `-SubtitleFactorTrackOrder \| -SFTO \| -SubTrackOrder \| -TrackOrder` | Instructs the weighted scoring algorithm to factor in the physical track placement when determining priorities for subtitle selection. |
 | `-FansubGroupPriority \| -fg <string>` | Sets preferred fansub groups for subtitle track prioritization (e.g., `-fg 'commie'`). Pass an empty string (`""`) to clear preferences via CLI. |
+| `-DeepSubtitleAudit \| -DSA \| -Deep \| -DeepAudit` | Triggers an advanced audit for files containing exactly two unnamed text subtitle tracks with matching codecs. If track headers are ambiguous, it extracts the streams to analyze file size deltas, automatically classifying the smaller track as Signs & Songs and the larger track as Full Dialogue. When executed with the `-Fix` switch, the script will automatically apply the correct names to the tracks via `mkvpropedit`. Includes built-in safety margins to skip processing if both tracks are nearly identical in size (e.g., dual Full Dialogue tracks). |
+| `-DeepSubtitleAuditDebug \| -DSADebug \| -DeepDebug \| -DeepAuditDebug` | Enables verbose terminal telemetry for the deep subtitle audit pipeline, printing file size metrics, delta ratio calculations, and real-time extraction loop logic to the console. |
 | `-SubtitlesHearingImpaired \| -sdh \| -hi \| -hicc \| -cc` | Prioritizes 'Hearing Impaired' or 'SDH' subtitle tracks (Western Mode). |
 | `-OverrideWesternDefaults \| -ovrdw` | Allows the script to save custom Western mode parameters to the JSON configuration. |
 
@@ -80,7 +82,7 @@ The script employs a dual-engine approach to process files—handling Anime and 
 ---
 
 ## Dependencies
-* **MKVToolNix:** Required for header probing (`mkvmerge`) and metadata editing (`mkvpropedit`).
+* **MKVToolNix:** Required for header probing (`mkvmerge`), raw subtitle extraction (`mkvextract`), and metadata editing (`mkvpropedit`).
 * **MediaInfo:** Required for video profile verification during AVC High 10 searches.
 
 ## Support & Maintenance
@@ -88,3 +90,8 @@ The script employs a dual-engine approach to process files—handling Anime and 
 
 ## Disclaimer
 *This script modifies MKV file headers and metadata. While designed for safety, always ensure you have backups of your media before running batch operations. The author is not responsible for any accidental data loss or corruption resulting from the use of this tool.*
+
+---
+> **Document Control**  
+> *This document is up-to-date with the following version of MKVMetadataAuditor+Fixer.*  
+> *2026.05.29__12.31.55*
