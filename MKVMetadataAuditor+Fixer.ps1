@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: MKVMetadataAuditor+Fixer.ps1
-# VERSION: 2026.05.28__13.39.18
+# VERSION: 2026.05.29__12.31.55
 # TARGET: PowerShell 7.6.2 LTS
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -60,6 +60,12 @@ param (
     [alias("SFTO", "SubTrackOrder", "TrackOrder")]
     [switch]$SubtitleFactorTrackOrder,
     
+    [alias("DSA", "Deep", "DeepAudit")]
+    [switch]$DeepSubtitleAudit,
+    
+    [alias("DSADebug", "DeepDebug", "DeepAuditDebug")]
+    [switch]$DeepSubtitleAuditDebug,
+    
     # New Automation Params
     [Alias("vid")] [string]$videoLanguage,
     [Alias("vidf")] [switch]$videoForceUpdate,
@@ -103,7 +109,7 @@ param (
 )
 
 # --- GLOBAL VERSION DEFINITION ---
-$scriptVersion = "2026.05.28__13.39.18"
+$scriptVersion = "2026.05.29__12.31.55"
 
 # --- VERSION REPORTER ---
 if ($Version) {
@@ -212,7 +218,9 @@ if ($Help -or $Manual) {
     
     Write-Host " DEPENDENCIES:" -ForegroundColor DarkYellow
     "  • MKVToolNix (mkvmerge): Used for deep-probing file headers and", 
-    "    extracting detailed track metadata for the audit.", 
+    "    extracting detailed track metadata for the audit.",
+    "  • MKVToolNix (mkvextract): Utilized by the Deep Subtitle Audit engine",
+    "    to dump raw subtitle streams for size comparison analysis.",    
     "  • MKVToolNix (mkvpropedit): The primary tool for the 'Fix' engine,", 
     "    allowing instant metadata edits without remuxing the file.", 
     "  • MediaInfo: Utilized specifically during AVC High 10 searches", 
@@ -345,6 +353,23 @@ if ($Help -or $Manual) {
     "      Sets preferred fansub groups for subtitle track prioritization",
     "      (e.g., -fg 'commie'). Pass an empty string (`"`") to clear the",
     "      list and reset preferences via command line.`n"
+)
+
+&$PrintManualBlock "  -DeepSubtitleAudit | -DSA | -Deep | -DeepAudit" @(
+    "      Triggers an advanced audit for files containing exactly two unnamed text",
+    "      subtitle tracks with matching codecs. If track headers are ambiguous,",
+    "      it extracts the streams to analyze file size deltas, automatically",
+    "      classifying the smaller track as Signs & Songs and the larger track as",
+    "      Full Dialogue. When executed with the -Fix switch, the script will",
+    "      automatically apply the correct names to the tracks via mkvpropedit.",
+    "      Includes built-in safety margins to skip processing if both tracks",
+    "      are nearly identical in size (e.g., dual Full Dialogue tracks).`n"
+)
+
+    &$PrintManualBlock "  -DeepSubtitleAuditDebug | -DSADebug | -DeepDebug | -DeepAuditDebug" @(
+    "      Enables verbose terminal telemetry for the deep subtitle audit pipeline,",
+    "      printing file size metrics, delta ratio calculations, and real-time",
+    "      extraction loop logic to the console.`n"
 )
     
     Write-Host "`n WESTERN SPECIFIC:`n" -ForegroundColor DarkYellow
@@ -510,6 +535,7 @@ $ProgressPreference = 'Continue'
 # --- TOOL PATH DISCOVERY ---
 $mkvpropedit = Get-Command mkvpropedit.exe -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source
 $mkvmerge    = Get-Command mkvmerge.exe    -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source
+$mkvextract  = Get-Command mkvextract.exe  -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source
 $mediainfo   = Get-Command MediaInfo.exe   -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source
 
 
@@ -518,6 +544,7 @@ $mediainfo   = Get-Command MediaInfo.exe   -ErrorAction SilentlyContinue | Selec
 # Fallback: If not in PATH, check your specific default location
 if (-not $mkvpropedit) { $mkvpropedit = "C:\Program Files\MKVToolNix\mkvpropedit.exe" }
 if (-not $mkvmerge)    { $mkvmerge    = "C:\Program Files\MKVToolNix\mkvmerge.exe" }
+if (-not $mkvextract)  { $mkvextract  = "C:\Program Files\MKVToolNix\mkvextract.exe" }
 if (-not $mediainfo)   { $mediainfo   = "C:\Program Files\MediaInfo\MediaInfo.exe" }
 
 # --- FINAL VALIDATION ---
@@ -1696,6 +1723,76 @@ foreach ($folderPath in $targetFolders) {
                     # --- SUBTITLES ---
                     if ($t.type -eq "subtitles") {
                         $trackName = if ($t.properties.track_name) { $t.properties.track_name.ToLower() } else { "" }
+                        
+                        # --- [DSA] DEEP SUBTITLE AUDIT ENGINE (LOG & DIALOGUE UPDATE) ---
+                        if ($DeepSubtitleAudit -and ($trackName -eq "" -or $trackName -eq "undefined")) {
+                            
+                            $fileGuid = "DSA_" + $fToFix.Name.GetHashCode().ToString('X')
+                            if ($null -eq $currentGroup.PSObject.Properties[$fileGuid]) {
+                                $allSubs = $currentGroup.Json.tracks | Where-Object { $_.type -eq "subtitles" }
+                                $unnamed = $allSubs | Where-Object { 
+                                    ($_.properties.language -match "eng|und|en") -and 
+                                    ([string]::IsNullOrWhiteSpace($_.properties.track_name) -or $_.properties.track_name -eq "undefined") -and
+                                    ($_.codec -match "S_TEXT|UTF8|SRT|ASS|SSA|SubStation|SubRip")
+                                }
+                                if ($DeepSubtitleAuditDebug) { Write-Host "  [DSA] Discovery: Found $($unnamed.Count) unnamed text tracks in $($fToFix.Name)" -ForegroundColor Cyan }
+                                $currentGroup | Add-Member -MemberType NoteProperty -Name $fileGuid -Value @{ "Tracks" = $unnamed; "Weights" = @{} } -Force
+                            }
+
+                            $dsaCtx = $currentGroup.PSObject.Properties[$fileGuid].Value
+                            $ambiguousTracks = $dsaCtx.Tracks
+
+                            if ($ambiguousTracks.Count -eq 2) {
+                                if ($dsaCtx.Weights.Count -eq 0) {
+                                    $w1 = 0; $w2 = 0
+                                    $w1 = if ($ambiguousTracks[0].properties.tag_number_of_frames) { [int64]$ambiguousTracks[0].properties.tag_number_of_frames } else { 0 }
+                                    $w2 = if ($ambiguousTracks[1].properties.tag_number_of_frames) { [int64]$ambiguousTracks[1].properties.tag_number_of_frames } else { 0 }
+
+                                    if ($w1 -eq 0 -and $w2 -eq 0) {
+                                        if ($DeepSubtitleAuditDebug) { Write-Host "  [DSA] Header stats missing. Extracting tracks..." -ForegroundColor DarkYellow }
+                                        $tempDir = Join-Path $env:TEMP "DSA_Probe"
+                                        if (-not (Test-Path $tempDir)) { New-Item -Path $tempDir -ItemType Directory | Out-Null }
+                                        $tmpFile1 = Join-Path $tempDir "track1.tmp"; $tmpFile2 = Join-Path $tempDir "track2.tmp"
+                                        & $mkvextract "$($fToFix.FullName)" tracks "$($ambiguousTracks[0].id):$tmpFile1" "$($ambiguousTracks[1].id):$tmpFile2" | Out-Null
+                                        if (Test-Path $tmpFile1) { $w1 = (Get-Item $tmpFile1).Length; Remove-Item $tmpFile1 }
+                                        if (Test-Path $tmpFile2) { $w2 = (Get-Item $tmpFile2).Length; Remove-Item $tmpFile2 }
+                                    }
+                                    $dsaCtx.Weights[$ambiguousTracks[0].id] = $w1
+                                    $dsaCtx.Weights[$ambiguousTracks[1].id] = $w2
+                                    if ($DeepSubtitleAuditDebug) { Write-Host "  [DSA] Sizes Found -> ID:$($ambiguousTracks[0].id):$w1 bytes | ID:$($ambiguousTracks[1].id):$w2 bytes" -ForegroundColor Gray }
+                                }
+
+                                $id1 = $ambiguousTracks[0].id; $id2 = $ambiguousTracks[1].id
+                                $w1 = $dsaCtx.Weights[$id1]; $w2 = $dsaCtx.Weights[$id2]
+
+                                if ($w1 -gt 0 -and $w2 -gt 0) {
+                                    $large = [Math]::Max($w1, $w2); $small = [Math]::Min($w1, $w2)
+                                    $ratio = $large / $small
+                                    $myWeight = $dsaCtx.Weights[$t.id]
+
+                                    if ($ratio -ge 3.0) {
+                                        $needsChange = $true
+                                        if ($myWeight -eq $large) {
+                                            $trackName = "full dialogue"
+                                            if ($Fix) { $Params += @('--edit', "track:$($t.id + 1)", '--set', "name=Full Dialogue") }
+                                            if ($DeepSubtitleAuditDebug) { Write-Host "  [DSA] SUCCESS: Identified Track $($t.id) as FULL DIALOGUE" -ForegroundColor Green }
+                                            [void]$fixDetails.Add("  [DSA] Identified Track $($t.id) as FULL DIALOGUE (Ratio: $($ratio.ToString('F2')))")
+                                        } else {
+                                            $trackName = "signs & songs"
+                                            if ($Fix) { $Params += @('--edit', "track:$($t.id + 1)", '--set', "name=Signs & Songs") }
+                                            if ($DeepSubtitleAuditDebug) { Write-Host "  [DSA] SUCCESS: Identified Track $($t.id) as SIGNS & SONGS" -ForegroundColor DarkGreen }
+                                            [void]$fixDetails.Add("  [DSA] Identified Track $($t.id) as SIGNS & SONGS (Ratio: $($ratio.ToString('F2')))")
+                                        }
+                                    } elseif ($DeepSubtitleAuditDebug) {
+                                        if ($t.id -eq $id1) { Write-Host "  [DSA] Ratio too low ($($ratio.ToString('F2'))). Skipping." -ForegroundColor Yellow }
+                                    }
+                                } elseif ($DeepSubtitleAuditDebug) {
+                                    if ($t.id -eq $id1) { Write-Host "  [DSA] FAILED: Could not determine sizes." -ForegroundColor Red }
+                                }
+                            }
+                        }
+                        # --- END DSA ENGINE ---
+                        
                         $trackLang = $t.properties.language.ToLower()
                         
                         # 1. ALWAYS capture current default status so we can strip it later if needed
