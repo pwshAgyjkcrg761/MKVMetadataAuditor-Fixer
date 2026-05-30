@@ -36,7 +36,6 @@ The script employs a dual-engine approach to process files—handling Anime and 
 | :--- | :--- |
 | `-Path <string>` | Defines the target directory for recursive scanning. |
 | `-Fix` | Enables **Write Mode**. Without this, the script runs in read-only audit mode. |
-| `-FixDebug` | Prints the exact `mkvpropedit` command strings before execution and displays subtitle scoring logic—ideal for verifying complex changes. |
 | `-FixNoBackup` | Overwrites metadata directly on source files (disables `_updated` folder). |
 | `-overrideDefaults \| -ovrd` | **Mandatory** when using automation flags to save parameters to the JSON config. |
 
@@ -45,7 +44,6 @@ The script employs a dual-engine approach to process files—handling Anime and 
 | :--- | :--- |
 | `-Western \| -w \| -west \| -WesternMode` | Sets defaults for Western media (English audio/subs). |
 | `-AvcHigh10Search \| -h10p` | **Search Mode:** Scans specifically for AVC High 10 (10-bit) video streams. |
-| `-AvcHigh10SearchDebug \| -h10pDebug` | Enables verbose terminal output during the High 10 search. |
 | `-fast` | Speeds up the High 10 search by skipping extended metadata checks. |
 | `-LogFullPath \| -lfp` | Forces the log to write the full file path instead of just the folder path during a fast AVC High 10 search. Requires -fast. |
 | `-disableRecurse \| -nr` | **No-Recurse:** Disables subfolder scanning; only processes the root path. |
@@ -63,7 +61,7 @@ The script employs a dual-engine approach to process files—handling Anime and 
 | `-SubtitleFactorTrackOrder \| -SFTO \| -SubTrackOrder \| -TrackOrder` | Instructs the weighted scoring algorithm to factor in the physical track placement when determining priorities for subtitle selection. |
 | `-FansubGroupPriority \| -fg <string>` | Sets preferred fansub groups for subtitle track prioritization (e.g., `-fg 'commie'`). Pass an empty string (`""`) to clear preferences via CLI. |
 | `-DeepSubtitleAudit \| -DSA \| -Deep \| -DeepAudit` | Triggers an advanced audit for files containing exactly two unnamed text subtitle tracks with matching codecs. If track headers are ambiguous, it extracts the streams to analyze file size deltas, automatically classifying the smaller track as Signs & Songs and the larger track as Full Dialogue. When executed with the `-Fix` switch, the script will automatically apply the correct names to the tracks via `mkvpropedit`. Includes built-in safety margins to skip processing if both tracks are nearly identical in size (e.g., dual Full Dialogue tracks). |
-| `-DeepSubtitleAuditDebug \| -DSADebug \| -DeepDebug \| -DeepAuditDebug` | Enables verbose terminal telemetry for the deep subtitle audit pipeline, printing file size metrics, delta ratio calculations, and real-time extraction loop logic to the console. |
+| `-DeepSubtitleAuditDebugExtraction \| -DSADebugEx \| -DeepDebugEx \| -DeepAuditDbgEx \| -DSADE` | Forces the DSA engine to skip the 'Stage 1 Header Probe' and proceed directly to 'Stage 2 Extraction'. Useful for testing the bitstream size analysis on files with valid headers. |
 | `-SubtitlesHearingImpaired \| -sdh \| -hi \| -hicc \| -cc` | Prioritizes 'Hearing Impaired' or 'SDH' subtitle tracks (Western Mode). |
 | `-OverrideWesternDefaults \| -ovrdw` | Allows the script to save custom Western mode parameters to the JSON configuration. |
 
@@ -71,6 +69,7 @@ The script employs a dual-engine approach to process files—handling Anime and 
 | Flag | Description |
 | :--- | :--- |
 | `-VerifyUpdates \| -V \| -Verify` | Chains an automated second-pass verification audit immediately after fixing to confirm metadata integrity. Requires `-Fix`. |
+| `-DevDebug \| -Dev \| -DevD \| -DBG \| -DDBG` | Global Debugging Switch. Clears standard UI reduction rules to expose low-level automated processes (tool discovery paths). Disables standard console clearing behavior during AVC High 10 Searches, forces real-time Deep Subtitle Audit (DSA) extraction tracking, and surfaces detailed arithmetic track-scoring metrics. |
 | `-help \| -manual` | Displays the internal help manual. |
 | `-DelLog` | Clears all historically accumulated files within the logs directory before starting operations. |
 | `-ClearDefaults \| -clr` | Deletes the saved Anime configuration JSON template to reset rules back to factory conditions. |
@@ -94,4 +93,4 @@ The script employs a dual-engine approach to process files—handling Anime and 
 ---
 > **Document Control**  
 > *This document is up-to-date with the following version of MKVMetadataAuditor+Fixer.*  
-> *2026.05.29__12.31.55*
+> *2026.05.30__16.25.24*
