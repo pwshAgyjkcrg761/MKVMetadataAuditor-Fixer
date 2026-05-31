@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: MKVMetadataAuditor+Fixer.ps1
-# VERSION: 2026.05.30__16.25.24
+# VERSION: 2026.05.31__08.10.38
 # TARGET: PowerShell 7.6.2 LTS
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -67,6 +67,9 @@ param (
     [alias("DSADebugEx", "DeepDebugEx", "DeepAuditDbgEx", "DSADE")]
     [switch]$DeepSubtitleAuditDebugExtraction,
     
+    [alias("DSANLD", "DeepSANLD", "NoLngD", "NLD", "LanguageDetectionOff", "LDO")]
+    [switch]$DeepSubtitleAuditNOLanguageDetection,
+    
     # New Automation Params
     [Alias("vid")] [string]$videoLanguage,
     [Alias("vidf")] [switch]$videoForceUpdate,
@@ -110,7 +113,7 @@ param (
 )
 
 # --- GLOBAL VERSION DEFINITION ---
-$scriptVersion = "2026.05.30__16.25.24"
+$scriptVersion = "2026.05.31__08.10.38"
 
 # --- VERSION REPORTER ---
 if ($Version) {
@@ -1796,13 +1799,14 @@ foreach ($folderPath in $targetFolders) {
                         $trackName = if ($t.properties.track_name) { $t.properties.track_name.ToLower() } else { "" }
                         
                         # --- [DSA] DEEP SUBTITLE AUDIT ENGINE (LOG & DIALOGUE UPDATE) ---
-                        if ($DeepSubtitleAudit -and ($trackName -eq "" -or $trackName -eq "undefined")) {
+                        if ($DeepSubtitleAudit -and ($trackName -eq "" -or $trackName -eq "undefined" -or ($trackLang -eq "jpn" -and -not $Western))) {
                             
                             $fileGuid = "DSA_" + $fToFix.Name.GetHashCode().ToString('X')
                             if ($null -eq $currentGroup.PSObject.Properties[$fileGuid]) {
                                 $allSubs = $currentGroup.Json.tracks | Where-Object { $_.type -eq "subtitles" }
                                 $unnamed = $allSubs | Where-Object { 
-                                    ($_.properties.language -match "eng|und|en") -and 
+                                    # Broaden scope to include mislabeled JPN tracks for language verification
+                                    ($_.properties.language -match "eng|und|en|jpn") -and 
                                     ([string]::IsNullOrWhiteSpace($_.properties.track_name) -or $_.properties.track_name -eq "undefined") -and
                                     ($_.codec -match "S_TEXT|UTF8|SRT|ASS|SSA|SubStationAlpha|SubRip|PGS|VobSub")
                                 }
@@ -1814,16 +1818,12 @@ foreach ($folderPath in $targetFolders) {
                             $ambiguousTracks = $dsaCtx.Tracks
 
                             if ($ambiguousTracks.Count -eq 2) {
-                                # [CHANGE] v2026.05.29__17.06.12 - Hierarchical Fallback Probe (Headers -> Bytes -> Text)
                                 if ($dsaCtx.Weights.Count -eq 0) {
                                     $id1 = $ambiguousTracks[0].id; $id2 = $ambiguousTracks[1].id
                                     $w1 = 0; $w2 = 0; $isResolved = $false
-                                    
-                                    # --- STAGE 1: HEADER PROBE ---
                                     $targetRatio = 3.0 # Default strict threshold
 
                                     if (-not $DeepSubtitleAuditDebugExtraction) {
-                                        # Look for frame counts in standard tags or extended statistics
                                         $h1 = if ($ambiguousTracks[0].properties.tag_number_of_frames) { [int64]$ambiguousTracks[0].properties.tag_number_of_frames } 
                                               elseif ($ambiguousTracks[0].properties.statistics_tags.NUMBER_OF_FRAMES) { [int64]$ambiguousTracks[0].properties.statistics_tags.NUMBER_OF_FRAMES } else { 0 }
                                         $h2 = if ($ambiguousTracks[1].properties.tag_number_of_frames) { [int64]$ambiguousTracks[1].properties.tag_number_of_frames } 
@@ -1834,15 +1834,10 @@ foreach ($folderPath in $targetFolders) {
                                             if ($hRatio -ge $targetRatio) {
                                                 if ($DevDebug) { Write-Host "  [DSA] Header Probe SUCCESS (Ratio: $($hRatio.ToString('F2')))" -ForegroundColor Green }
                                                 $w1 = $h1; $w2 = $h2; $isResolved = $true
-                                            } elseif ($DevDebug) {
-                                                Write-Host "  [DSA] Header ratio too low ($($hRatio.ToString('F2'))). Falling back to Extraction..." -ForegroundColor DarkYellow
                                             }
                                         }
-                                    } elseif ($DevDebug) {
-                                        Write-Host "  [DSA] Stage 1 Header Probe bypassed via -DSADE flag." -ForegroundColor DarkYellow
                                     }
 
-                                    # --- STAGE 2: EXTRACTION PROBE (BYTES & TEXT) ---
                                     if (-not $isResolved) {
                                         $tempDir = Join-Path $env:TEMP "DSA_Probe"
                                         if (Test-Path $tempDir) { Remove-Item $tempDir -Recurse -Force -ErrorAction SilentlyContinue }
@@ -1851,62 +1846,84 @@ foreach ($folderPath in $targetFolders) {
                                         $tmpFile1 = Join-Path $tempDir "track1.tmp"; $tmpFile2 = Join-Path $tempDir "track2.tmp"
                                         & $mkvextract "$($fToFix.FullName)" tracks "$($id1):$tmpFile1" "$($id2):$tmpFile2" | Out-Null
                                         
-                                        # Detection Logic: mkvextract replaces .tmp with .sub for VobSub tracks
-                                        $vobSub1 = $tmpFile1 -replace '\.tmp$', '.sub'
-                                        $vobSub2 = $tmpFile2 -replace '\.tmp$', '.sub'
-
+                                        $vobSub1 = $tmpFile1 -replace '\.tmp$', '.sub'; $vobSub2 = $tmpFile2 -replace '\.tmp$', '.sub'
                                         $probeFile1 = if (Test-Path -LiteralPath $tmpFile1) { $tmpFile1 } elseif (Test-Path -LiteralPath $vobSub1) { $vobSub1 } else { $null }
                                         $probeFile2 = if (Test-Path -LiteralPath $tmpFile2) { $tmpFile2 } elseif (Test-Path -LiteralPath $vobSub2) { $vobSub2 } else { $null }
 
                                         if ($null -ne $probeFile1 -and (Test-Path -LiteralPath $probeFile1)) {
-                                            # Sub-Stage 2A: Raw Byte Count
+                                            $ExtractDialogueText = {
+                                                param($path, $outPath)
+                                                $sb = New-Object System.Text.StringBuilder
+                                                $content = Get-Content $path -Raw -Encoding utf8 -ErrorAction SilentlyContinue
+                                                if ($content -match "[\u0000]") { $content = Get-Content $path -Raw -Encoding ansi }
+                                                $lines = $content -split "`r?`n"
+                                                foreach ($line in $lines) {
+                                                    $line = $line.Trim()
+                                                    if ($line -match "^(?:Dialogue|Comment):\s*") {
+                                                        if ($line -match "\\p[1-9]") { continue }
+                                                        $parts = $line -split ",", 10
+                                                        if ($parts.Count -eq 10) {
+                                                            # Aggressive Clean: Strip all tags, then strip everything but Unicode Letters
+                                                            $txt = $parts[9] -replace '\{.*?\}', '' -replace '\\[Nnh]', ''
+                                                            $clean = $txt -replace '[^\p{L}]', ''
+                                                            if ($clean.Length -gt 0) { [void]$sb.Append($clean) }
+                                                        }
+                                                    } elseif ($line -match "-->" -or $line -match "^\d+$") { continue } else {
+                                                        # SRT / Generic: Strip tags and everything but Unicode Letters
+                                                        $txt = $line -replace '<.*?>', '' -replace '\{.*?\}', ''
+                                                        $clean = $txt -replace '[^\p{L}]', ''
+                                                        if ($clean.Length -gt 0) { [void]$sb.Append($clean) }
+                                                    }
+                                                }
+                                                $final = $sb.ToString()
+                                                if ($DevDebug) { $final | Out-File $outPath -Encoding utf8 }
+                                                return $final
+                                            }
+
+                                            $clean1 = &$ExtractDialogueText $probeFile1 (Join-Path $tempDir "track1_cleaned.txt")
+                                            $clean2 = &$ExtractDialogueText $probeFile2 (Join-Path $tempDir "track2_cleaned.txt")
+
+                                            if (-not $DeepSubtitleAuditNOLanguageDetection) {
+                                                $DetectLng = {
+                                                    param($text)
+                                                    if ([string]::IsNullOrWhiteSpace($text)) { return "und" }
+                                                    $total = $text.Length
+                                                    $cyrillic = [regex]::Matches($text, "[\u0400-\u04FF]").Count
+                                                    $cjk = [regex]::Matches($text, "[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FAF]").Count
+                                                    $latin = [regex]::Matches($text, "[\u0000-\u007F]").Count
+                                                    if ($cjk / $total -gt 0.05) { return "jpn" }
+                                                    if ($cyrillic / $total -gt 0.05) { return "rus" }
+                                                    if ($latin / $total -gt 0.5) { return "eng" } 
+                                                    return "und"
+                                                }
+                                                $res1 = &$DetectLng $clean1; $res2 = &$DetectLng $clean2
+                                                $pair = @($res1, $res2)
+                                                for ($i=0; $i -lt 2; $i++) {
+                                                    $detected = $pair[$i]
+                                                    if ($ambiguousTracks[$i].properties.language -ne $detected -and $detected -ne "und") {
+                                                        if ($DevDebug) { Write-Host "  [DSA] Lng Fix: Track $($ambiguousTracks[$i].id) ($($ambiguousTracks[$i].properties.language) -> $detected)" -ForegroundColor DarkCyan }
+                                                        $ambiguousTracks[$i].properties.language = $detected
+                                                        if ($Fix) { $Params += @('--edit', "track:$($ambiguousTracks[$i].id + 1)", '--set', "language=$detected") }
+                                                    }
+                                                }
+                                            }
+
                                             $b1 = (Get-Item $probeFile1).Length; $b2 = (Get-Item $probeFile2).Length
                                             $bRatio = [Math]::Max($b1, $b2) / [Math]::Max(1, [Math]::Min($b1, $b2))
-                                            
                                             if ($bRatio -ge $targetRatio) {
                                                 if ($DevDebug) { Write-Host "  [DSA] Bitstream Probe SUCCESS (Ratio: $($bRatio.ToString('F2')))" -ForegroundColor Green }
                                                 $w1 = $b1; $w2 = $b2; $isResolved = $true
                                             } else {
-                                                # Sub-Stage 2B: Text-Only Character Count (For SSA/ASS stylized ties)
                                                 if ($DevDebug) { Write-Host "  [DSA] Bitstream ratio too low ($($bRatio.ToString('F2'))). Performing Text-Only Deep Probe..." -ForegroundColor DarkCyan }
-                                                
-                                                $ExtractDialogueText = {
-                                                    param($path, $outPath)
-                                                    $sb = New-Object System.Text.StringBuilder
-                                                    $content = Get-Content $path -Raw -Encoding utf8 -ErrorAction SilentlyContinue
-                                                    if ($content -match "[\u0000]") { $content = Get-Content $path -Raw -Encoding ansi }
-                                                    
-                                                    $lines = $content -split "`r?`n"
-                                                    foreach ($line in $lines) {
-                                                        if ($line -match "^(?:Dialogue|Comment):\s*[^,]*,") {
-                                                            if ($line -match "\\p[1-9]") { continue }
-                                                            $parts = $line -split ",", 10
-                                                            if ($parts.Count -eq 10) {
-                                                                $clean = $parts[9] -replace '\{.*?\}', '' -replace '\\[Nnh]', ' ' -replace '\d', '' -replace '[^\p{L}\s]', ''
-                                                                if ($clean.Trim().Length -gt 0) { [void]$sb.AppendLine($clean.Trim()) }
-                                                            }
-                                                        }
-                                                    }
-                                                    $final = $sb.ToString().Trim()
-                                                    $final | Out-File $outPath -Encoding utf8 
-                                                    return $final
-                                                }
-
-                                                $clean1 = &$ExtractDialogueText $tmpFile1 (Join-Path $tempDir "track1_cleaned.txt")
-                                                $clean2 = &$ExtractDialogueText $tmpFile2 (Join-Path $tempDir "track2_cleaned.txt")
-                                                
-                                                $tw1 = $clean1.Length; $tw2 = $clean2.Length
-                                                $tRatio = if ($tw1 -gt 0 -and $tw2 -gt 0) { [Math]::Max($tw1, $tw2) / [Math]::Max(1, [Math]::Min($tw1, $tw2)) } else { 0 }
-                                                
-                                                # RELAXED THRESHOLD ONLY FOR TEXT PROBE
+                                                $w1 = $clean1.Length; $w2 = $clean2.Length
+                                                $tRatio = if ($w1 -gt 0 -and $w2 -gt 0) { [Math]::Max($w1, $w2) / [Math]::Max(1, [Math]::Min($w1, $w2)) } else { 0 }
                                                 if ($tRatio -ge 2.0) {
                                                     if ($DevDebug) { Write-Host "  [DSA] Text Probe SUCCESS (Ratio: $($tRatio.ToString('F2')))" -ForegroundColor Green }
-                                                    $w1 = $tw1; $w2 = $tw2; $isResolved = $true; $targetRatio = 2.0
+                                                    $isResolved = $true; $targetRatio = 2.0
                                                 }
                                             }
                                         }
-                                        
-                                        # Cleanup or Debug Inspection
+
                                         if ($DevDebug) {
                                             Write-Host "    [DEBUG] Final Weight ID:$id1 ($w1) | ID:$id2 ($w2)" -ForegroundColor Gray
                                             Write-Host "    [DEBUG] Inspection Files: $tempDir" -ForegroundColor DarkCyan
@@ -1914,8 +1931,7 @@ foreach ($folderPath in $targetFolders) {
                                             if (Test-Path $tempDir) { Remove-Item $tempDir -Recurse -Force -ErrorAction SilentlyContinue }
                                         }
                                     }
-                                    
-                                    # Finalize Weights
+
                                     $dsaCtx.Weights[$id1] = $w1; $dsaCtx.Weights[$id2] = $w2
                                     $currentGroup | Add-Member -MemberType NoteProperty -Name ($fileGuid + "_Ratio") -Value $targetRatio -Force
                                 }
@@ -1927,7 +1943,10 @@ foreach ($folderPath in $targetFolders) {
                                 
                                 if ($w1 -gt 0 -and $w2 -gt 0) {
                                     $ratio = [Math]::Max($w1, $w2) / [Math]::Min($w1, $w2)
-                                    if ($ratio -ge $dynRatio) {
+                                    # Only perform Sizing/Naming logic if both tracks are resolved as English
+                                    $isDualEng = ($ambiguousTracks[0].properties.language -eq "eng" -and $ambiguousTracks[1].properties.language -eq "eng")
+                                    
+                                    if ($ratio -ge $dynRatio -and $isDualEng) {
                                         $needsChange = $true
                                         if ($dsaCtx.Weights[$t.id] -eq [Math]::Max($w1, $w2)) {
                                             $trackName = "full dialogue"
@@ -1940,6 +1959,8 @@ foreach ($folderPath in $targetFolders) {
                                             if ($DevDebug) { Write-Host "  [DSA] SUCCESS: Identified Track $($t.id) as SIGNS & SONGS" -ForegroundColor DarkGreen }
                                             [void]$fixDetails.Add("  [DSA] Identified Track $($t.id) as SIGNS & SONGS (Ratio: $($ratio.ToString('F2')))")
                                         }
+                                    } elseif ($ratio -ge $dynRatio -and -not $isDualEng) {
+                                        if ($DevDebug) { Write-Host "  [DSA] Sizing valid ($($ratio.ToString('F2'))), but tracks are not Dual-English. Skipping Naming." -ForegroundColor Yellow }
                                     } elseif ($DevDebug) {
                                         if ($t.id -eq $ambiguousTracks[0].id) { 
                                             Write-Host "  [DSA] All probes failed. Ratio too low ($($ratio.ToString('F2'))). Skipping. (Counts: $w1 / $w2)" -ForegroundColor Yellow 
