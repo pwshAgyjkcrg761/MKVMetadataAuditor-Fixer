@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: MKVMetadataAuditor+Fixer.ps1
-# VERSION: 2026.05.31__14.45.22
+# VERSION: 2026.05.31__18.40.22
 # TARGET: PowerShell 7.6.2 LTS
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -113,7 +113,7 @@ param (
 )
 
 # --- GLOBAL VERSION DEFINITION ---
-$scriptVersion = "2026.05.31__14.45.22"
+$scriptVersion = "2026.05.31__18.40.22"
 
 # --- VERSION REPORTER ---
 if ($Version) {
@@ -1367,7 +1367,8 @@ foreach ($folderPath in $targetFolders) {
             # Write-Progress -Activity "Total Session Progress" -Status $statusMsg -PercentComplete $percent
             # If debugging, ensure we move to a new line so the bar remains visible
             if ($DevDebug) { 
-                Write-Host "`n [DEBUG] Scanning: $($f.Name)" -ForegroundColor Gray 
+                Write-Host "`n [DEBUG] File Path: $($f.FullName)" -ForegroundColor Gray
+                Write-Host " [DEBUG] File Name: $($f.Name)" -ForegroundColor DarkGray 
             }
             if (Test-Path -LiteralPath $mediainfo) {
                 $profile = (& $mediainfo --Inform="Video;%Format_Profile%" "$($f.FullName)").ToString().Trim()
@@ -1496,6 +1497,11 @@ foreach ($folderPath in $targetFolders) {
             # 1. Update the user with the progress bar immediately
             Write-InlineProgress -Current ($i + 1) -Total $mkvCount -Message "Analyzing Files"
             
+            if ($DevDebug) {
+                Write-Host "`n`n`n [DEBUG] File Path: $($f.FullName)" -ForegroundColor Gray
+                Write-Host " [DEBUG] File Name: $($f.Name)" -ForegroundColor DarkGray
+            }
+            
             # 2. Log path to file
             $f.FullName | Out-File $pathLog -Append -Encoding utf8
             
@@ -1509,10 +1515,11 @@ foreach ($folderPath in $targetFolders) {
                 "$($_.id)|$sel|$($_.type)|$($_.codec)|$($p.language)|Def:$([bool]$p.default_track)|Frc:$([bool]$p.forced_track)|HI:$([bool]$p.flag_hearing_impaired)|$($p.track_name)" 
             }) -join "`n")
             
-            # [CHANGE] v2026.05.29__15.11.02 - Signature Debugging
+            # Signature Debugging
             if ($DevDebug) {
-                Write-Host "`n [DEBUG] Signature for: $($f.Name)" -ForegroundColor DarkCyan
+                Write-Host " [DEBUG] Generating Track Signature..." -ForegroundColor DarkCyan
                 $sig.Split("`n") | ForEach-Object { Write-Host "    $($_.Trim())" -ForegroundColor Gray }
+                Write-Host "`n"
             }
             
             # --- SEPARATE AVC HIGH 10 SEARCH ---
@@ -1875,12 +1882,14 @@ foreach ($folderPath in $targetFolders) {
                                         if (Test-Path $tempDir) { Remove-Item $tempDir -Recurse -Force -ErrorAction SilentlyContinue }
                                         New-Item -Path $tempDir -ItemType Directory | Out-Null
                                         
-                                        $tmpFile1 = Join-Path $tempDir "track1.tmp"; $tmpFile2 = Join-Path $tempDir "track2.tmp"
+                                        # Use correct extensions so the logic engine recognizes the file types
+                                        $ext1 = if ($ambiguousTracks[0].codec -match "UTF8|SRT") { "srt" } else { "ass" }
+                                        $ext2 = if ($ambiguousTracks[1].codec -match "UTF8|SRT") { "srt" } else { "ass" }
+                                        $tmpFile1 = Join-Path $tempDir "track1.$ext1"; $tmpFile2 = Join-Path $tempDir "track2.$ext2"
+                                        
                                         & $mkvextract "$($fToFix.FullName)" tracks "$($id1):$tmpFile1" "$($id2):$tmpFile2" | Out-Null
                                         
-                                        $vobSub1 = $tmpFile1 -replace '\.tmp$', '.sub'; $vobSub2 = $tmpFile2 -replace '\.tmp$', '.sub'
-                                        $probeFile1 = if (Test-Path -LiteralPath $tmpFile1) { $tmpFile1 } elseif (Test-Path -LiteralPath $vobSub1) { $vobSub1 } else { $null }
-                                        $probeFile2 = if (Test-Path -LiteralPath $tmpFile2) { $tmpFile2 } elseif (Test-Path -LiteralPath $vobSub2) { $vobSub2 } else { $null }
+                                        $probeFile1 = $tmpFile1; $probeFile2 = $tmpFile2
 
                                         if ($null -ne $probeFile1 -and (Test-Path -LiteralPath $probeFile1)) {
                                             $ExtractDialogueText = {
@@ -1889,20 +1898,51 @@ foreach ($folderPath in $targetFolders) {
                                                 $content = Get-Content $path -Raw -Encoding utf8 -ErrorAction SilentlyContinue
                                                 if ($content -match "[\u0000]") { $content = Get-Content $path -Raw -Encoding ansi }
                                                 $lines = $content -split "`r?`n"
+                                                
+                                                $isASS = $path -match "\.(ass|ssa)$"
+                                                $history = New-Object System.Collections.Generic.List[string]
+
                                                 foreach ($line in $lines) {
                                                     $line = $line.Trim()
-                                                    if ($line -match "^(?:Dialogue|Comment):\s*") {
-                                                        if ($line -match "\\p[1-9]") { continue }
-                                                        $parts = $line -split ",", 10
-                                                        if ($parts.Count -eq 10) {
-                                                            $txt = $parts[9] -replace '\{.*?\}', '' -replace '\\[Nnh]', ''
-                                                            $clean = $txt -replace '[^\p{L}]', ''
-                                                            if ($clean.Length -gt 0) { [void]$sb.Append($clean) }
+                                                    if ($isASS) {
+                                                        if ($line -match "^Dialogue:") {
+                                                            if ($line -match "\\(?:p[1-9]|clip|iclip|move|org|t)\b") { continue }
+
+                                                            $parts = $line -split ",", 10
+                                                            if ($parts.Count -eq 10) {
+                                                                if ($parts[8] -match "(?:sync|karaoke|fx|ktp|auto)") { continue }
+
+                                                                $txt = $parts[9]
+                                                                
+                                                                # [RULE 2] Aggressive Tech Discard (No word boundaries for units)
+                                                                $techRegex = "(?i)(?:circle|square|box|rectangle|line|triangle|oval|star|polygon|cm|mm|width|height|depth|circ|vert|horiz)"
+                                                                if ($txt -match "(?i)^[mb]\s-?\d+" -or $txt -match $techRegex) { continue }
+
+                                                                # [RULE 3] Linguistic & 10-Line History Check
+                                                                $readable = $txt -replace '\{.*?\}', '' -replace '\\[Nnh]', ' '
+                                                                $trimmed = $readable.Trim()
+
+                                                                # Skip if phrase exists in the last 10 lines or lacks punctuation
+                                                                if ($history.Contains($trimmed) -or -not ($trimmed -match "\p{L}[,.?!]")) { continue }
+                                                                
+                                                                [void]$sb.AppendLine($trimmed)
+                                                                
+                                                                # Update sliding window
+                                                                $history.Add($trimmed)
+                                                                if ($history.Count -gt 10) { $history.RemoveAt(0) }
+                                                            }
                                                         }
-                                                    } elseif ($line -match "-->" -or $line -match "^\d+$") { continue } else {
-                                                        $txt = $line -replace '<.*?>', '' -replace '\{.*?\}', ''
-                                                        $clean = $txt -replace '[^\p{L}]', ''
-                                                        if ($clean.Length -gt 0) { [void]$sb.Append($clean) }
+                                                    } else {
+                                                        # SRT Logic
+                                                        if ($line -match "-->" -or $line -match "^\d+$" -or [string]::IsNullOrWhiteSpace($line)) { continue }
+                                                        $readable = $line -replace '<.*?>', '' -replace '\{.*?\}', ''
+                                                        $trimmed = $readable.Trim()
+                                                        
+                                                        if ($history.Contains($trimmed) -or -not ($trimmed -match "\p{L}[,.?!]")) { continue }
+                                                        
+                                                        [void]$sb.AppendLine($trimmed)
+                                                        $history.Add($trimmed)
+                                                        if ($history.Count -gt 10) { $history.RemoveAt(0) }
                                                     }
                                                 }
                                                 $final = $sb.ToString()
@@ -1938,19 +1978,26 @@ foreach ($folderPath in $targetFolders) {
                                                     # 2. Latin-Based Language Detection
                                                     $latin = [regex]::Matches($text, "[\u0000-\u007F\u0080-\u00FF\u0100-\u017F\u1E00-\u1EFF]").Count
                                                     if ($latin / $total -gt 0.5) {
-                                                        # Vietnamese (Distinctive double-diacritics)
-                                                        if ($text -match "[ươấầẩẫậếềểễệốồổỗộắằẳẵặíúéáóí]"){ return "vie" }
-                                                        # German
+                                                        # Vietnamese (Specific markers: 'đ' and distinctive stacked diacritics)
+                                                        if ($text -match "[đĐ]|[ấầẩẫậếềểễệốồổỗộắằẳẵặ]") { return "vie" }
+                                                        # German (ß and umlauts)
                                                         if ($text -match "[ßäöüÄÖÜ]") { return "ger" }
-                                                        # Spanish
-                                                        if ($text -match "[ñ¿¡íáóúé]") { return "spa" }
-                                                        # Portuguese (Distinctive til ~ on a/o)
-                                                        if ($text -match "[ãõâêíóúçÃÕ]") { return "por" }
-                                                        # French / Italian Fallback
-                                                        if ($text -match "[àâçéèêëîïôûùÿœæÀÂÇÉÈÊËÎÏÔÛÙŸ]") { 
-                                                            if ($text -match "[œêëâîû]") { return "fre" }
-                                                            return "ita" 
-                                                        }
+                                                        
+                                                        # Spanish (High-confidence: ñ and inverted punctuation)
+                                                        if ($text -match "[ñÑ¿¡]") { return "spa" }
+                                                        
+                                                        # Portuguese (High-confidence: tilde on vowels)
+                                                        if ($text -match "[ãÃõÕ]") { return "por" }
+                                                        
+                                                        # French (High-confidence: cedilla, ligatures, and specific circumflex/diaeresis)
+                                                        if ($text -match "[çÇœŒêëâîû]") { return "fre" }
+
+                                                        # Italian (High-confidence: specific grave accents rare in English/French loanwords)
+                                                        if ($text -match "[ìÌòÒùÙ]") { return "ita" }
+                                                        
+                                                        # Honorifics (Detects common English-Japanese scene suffixes)
+                                                        if ($text -match "-(?:san|kun|chan|sama|dono|senpai|kohai|sensei)\b") { return "enm" }
+
                                                         # Default to English if Latin but no specific markers found
                                                         return "eng"
                                                     }
