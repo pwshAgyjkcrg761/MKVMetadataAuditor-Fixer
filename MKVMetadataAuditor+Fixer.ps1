@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: MKVMetadataAuditor+Fixer.ps1
-# VERSION: 2026.05.31__19.19.22
+# VERSION: 2026.06.01__15.25.00
 # TARGET: PowerShell 7.6.2 LTS
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -113,7 +113,7 @@ param (
 )
 
 # --- GLOBAL VERSION DEFINITION ---
-$scriptVersion = "2026.05.31__19.19.22"
+$scriptVersion = "2026.06.01__15.25.00"
 
 # --- VERSION REPORTER ---
 if ($Version) {
