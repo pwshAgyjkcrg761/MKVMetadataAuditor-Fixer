@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: MKVMetadataAuditor+Fixer.ps1
-# VERSION: 2026.05.31__18.40.22
+# VERSION: 2026.05.31__19.19.22
 # TARGET: PowerShell 7.6.2 LTS
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -113,7 +113,7 @@ param (
 )
 
 # --- GLOBAL VERSION DEFINITION ---
-$scriptVersion = "2026.05.31__18.40.22"
+$scriptVersion = "2026.05.31__19.19.22"
 
 # --- VERSION REPORTER ---
 if ($Version) {
@@ -1882,18 +1882,33 @@ foreach ($folderPath in $targetFolders) {
                                         if (Test-Path $tempDir) { Remove-Item $tempDir -Recurse -Force -ErrorAction SilentlyContinue }
                                         New-Item -Path $tempDir -ItemType Directory | Out-Null
                                         
-                                        # Use correct extensions so the logic engine recognizes the file types
-                                        $ext1 = if ($ambiguousTracks[0].codec -match "UTF8|SRT") { "srt" } else { "ass" }
-                                        $ext2 = if ($ambiguousTracks[1].codec -match "UTF8|SRT") { "srt" } else { "ass" }
+                                        # Map specific binary extensions for Image-based subs
+                                        $GetExt = {
+                                            param($codec)
+                                            if ($codec -match "PGS") { return "sup" }
+                                            if ($codec -match "VobSub") { return "sub" }
+                                            if ($codec -match "UTF8|SRT") { return "srt" }
+                                            return "ass"
+                                        }
+
+                                        $ext1 = &$GetExt $ambiguousTracks[0].codec
+                                        $ext2 = &$GetExt $ambiguousTracks[1].codec
                                         $tmpFile1 = Join-Path $tempDir "track1.$ext1"; $tmpFile2 = Join-Path $tempDir "track2.$ext2"
                                         
                                         & $mkvextract "$($fToFix.FullName)" tracks "$($id1):$tmpFile1" "$($id2):$tmpFile2" | Out-Null
                                         
+                                        # For VobSub, mkvextract creates .sub and .idx. We target the .sub bitstream.
                                         $probeFile1 = $tmpFile1; $probeFile2 = $tmpFile2
+                                        
+                                        # Identify if we are dealing with Image-based subs (PGS/VobSub)
+                                        $isImageSub = ($ambiguousTracks[0].codec -match "PGS|VobSub")
 
                                         if ($null -ne $probeFile1 -and (Test-Path -LiteralPath $probeFile1)) {
                                             $ExtractDialogueText = {
                                                 param($path, $outPath)
+                                                # [IMAGE BYPASS] If binary image subs, skip text processing immediately
+                                                if ($path -match "\.(sup|sub)$") { return "IMAGE_SUB_BYPASS" }
+
                                                 $sb = New-Object System.Text.StringBuilder
                                                 $content = Get-Content $path -Raw -Encoding utf8 -ErrorAction SilentlyContinue
                                                 if ($content -match "[\u0000]") { $content = Get-Content $path -Raw -Encoding ansi }
@@ -1953,8 +1968,16 @@ foreach ($folderPath in $targetFolders) {
                                             $clean1 = &$ExtractDialogueText $probeFile1 (Join-Path $tempDir "track1_cleaned.txt")
                                             $clean2 = &$ExtractDialogueText $probeFile2 (Join-Path $tempDir "track2_cleaned.txt")
 
+                                            # If Image-Based (PGS/VOB), set weights to the binary file size
+                                            if ($isImageSub) {
+                                                $w1 = (Get-Item -LiteralPath $probeFile1).Length
+                                                $w2 = (Get-Item -LiteralPath $probeFile2).Length
+                                                $isResolved = $true
+                                            }
+
                                             # --- MULTI-LANGUAGE DETECTION ENGINE ---
-                                            if (-not $DeepSubtitleAuditNOLanguageDetection) {
+                                            # Note: -and -not $isImageSub ensures binary files don't crash the detector
+                                            if (-not $DeepSubtitleAuditNOLanguageDetection -and -not $isImageSub) {
                                                 $DetectLng = {
                                                     param($text)
                                                     if ([string]::IsNullOrWhiteSpace($text)) { return "und" }
