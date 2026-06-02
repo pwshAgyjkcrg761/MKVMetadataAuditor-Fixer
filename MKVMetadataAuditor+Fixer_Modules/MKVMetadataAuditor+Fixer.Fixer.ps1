@@ -1,6 +1,6 @@
 # ==============================================================================
 # MODULE: MKVMetadataAuditor+Fixer.Fixer.ps1
-# VERSION: 2026.06.02__08.04.00
+# VERSION: 2026.06.02__11.48.00
 # ==============================================================================
 
 function Invoke-MkvBackup {
@@ -47,9 +47,9 @@ function Get-TrackScore {
         [switch]$SubtitlesHearingImpaired
     )
     
-    # Standard Regex Patterns
-    $RegexDiag = "Dialog|Full|Japanese Audio|Main"
-    $RegexSign = "Sign|Song|Lyric|Opening|Ending|OP|ED|Partial|Forced|Translation|ASSR|S&S|S\s&\sS|Dubtitle"
+    # Use Global Regex Patterns from Main Controller
+    $RegexDiag = $script:RegexDiag
+    $RegexSign = $script:RegexSign
 
     $score = 0
     $ruleLog = New-Object System.Collections.Generic.List[string]
