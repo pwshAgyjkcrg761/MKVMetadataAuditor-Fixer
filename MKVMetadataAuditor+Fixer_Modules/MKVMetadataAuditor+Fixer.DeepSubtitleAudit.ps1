@@ -1,6 +1,6 @@
 # ==============================================================================
 # MODULE: MKVMetadataAuditor+Fixer.DeepSubtitleAudit.ps1
-# VERSION: 2026.06.01__09.35.00
+# VERSION: 2026.06.01__21.12.00
 # ==============================================================================
 
 function Get-SubtitleExtension {
@@ -35,10 +35,12 @@ function Detect-SubtitleLanguage {
     $latin = [regex]::Matches($text, "[\u0000-\u007F\u0080-\u00FF\u0100-\u017F\u1E00-\u1EFF]").Count
     if ($latin / $total -gt 0.5) {
         if ($text -match "[đĐ]|[ấầẩẫậếềểễệốồổỗộắằẳẵặ]") { return "vie" }
-        if ($text -match "[ßäöüÄÖÜ]") { return "ger" }
+        # German (Requires 'ß' OR at least 15 umlauts to avoid false positives)
+        if ($text -match "ß" -or ([regex]::Matches($text, "[äöüÄÖÜ]").Count -gt 15)) { return "ger" }
         if ($text -match "[ñÑ¿¡]") { return "spa" }
         if ($text -match "[ãÃõÕ]") { return "por" }
-        if ($text -match "[çÇœŒêëâîû]") { return "fre" }
+        # French (Requires ligatures 'œ' OR at least 15 occurrences of cedillas/accents)
+        if ($text -match "[œŒ]" -or ([regex]::Matches($text, "[çÇêëâîû]").Count -gt 15)) { return "fre" }
         if ($text -match "[ìÌòÒùÙ]") { return "ita" }
         # Honorifics (ONLY return enm if the flag is active)
         if ($Honorifics -and ($text -match "-(?:san|kun|chan|sama|dono|senpai|kohai|sensei)\b")) { return "enm" }
