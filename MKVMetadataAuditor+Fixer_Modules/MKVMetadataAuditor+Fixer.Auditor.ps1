@@ -16,8 +16,9 @@ function Get-AuditSelector {
 function Get-AuditFlags {
     param($tracks, $IsWestern, $fixerConfig, $Honorifics, $SubtitlesHearingImpaired)
     
-    $RegexDiag = "Dialog|Full|Japanese Audio|Main"
-    $RegexSign = "Sign|Song|Lyric|Opening|Ending|OP|ED|Partial|Forced|Translation|ASSR|S&S|S\s&\sS|Dubtitle"
+    # Use Global Regex Patterns from Main Controller
+    $RegexDiag = $script:RegexDiag
+    $RegexSign = $script:RegexSign
 
     $reasons = ""; 
     $jpnAud = $tracks | Where-Object { $_.type -eq "audio" -and $_.properties.language -eq "jpn" }
