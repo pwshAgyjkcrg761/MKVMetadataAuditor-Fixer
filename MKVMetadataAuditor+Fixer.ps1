@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: MKVMetadataAuditor+Fixer.ps1
-# VERSION: 2026.06.02__14.37.16
+# VERSION: 2026.06.02__16.03.00
 # TARGET: PowerShell 7.6.2 LTS
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -113,7 +113,7 @@ param (
 )
 
 # --- GLOBAL VERSION DEFINITION ---
-$scriptVersion = "2026.06.02__14.37.16"
+$scriptVersion = "2026.06.02__16.03.00"
 
 # --- VERSION REPORTER ---
 if ($Version) {
@@ -1291,13 +1291,19 @@ foreach ($folderPath in $targetFolders) {
 
                                     if ($isCompatible) {
                                         $typeLabel = if ($isText1) { "Text/Text" } elseif ($isPGS1) { "PGS/PGS" } else { "VobSub/VobSub" }
-                                        if ($DevDebug) {
+                                        if ($DevDebug) { 
+                                            
                                             Write-Host "  [DevDebug-DSA] Discovery: Compatible pair found ($typeLabel). Initializing Analysis..." -ForegroundColor Cyan 
                                         }
-                                        $currentGroup | Add-Member -MemberType NoteProperty -Name $fileGuid -Value @{ "Tracks" = $allSubs; "Weights" = @{} } -Force
-                                    } else {
-                                        if ($DevDebug) { Write-Host "  [DevDebug-DSA] Skipping: Category Mismatch (Codec 1: $c1 | Codec 2: $c2)" -ForegroundColor DarkGray }
-                                        $currentGroup | Add-Member -MemberType NoteProperty -Name $fileGuid -Value $null -Force
+
+                                        # [TRUTH CAPTURE] Take the snapshot BEFORE language detection runs
+                                        $origNames = @{}; $origLangs = @{}
+                                        foreach ($sub in $allSubs) {
+                                            $origNames[$sub.id] = if ([string]::IsNullOrWhiteSpace($sub.properties.track_name)) { "[None]" } else { $sub.properties.track_name }
+                                            $origLangs[$sub.id] = $sub.properties.language
+                                        }
+
+                                        $currentGroup | Add-Member -MemberType NoteProperty -Name $fileGuid -Value @{ "Tracks" = $allSubs; "Weights" = @{}; "OriginalNames" = $origNames; "OriginalLangs" = $origLangs } -Force
                                     }
                                 } else {
                                     if ($DevDebug) { Write-Host "  [DevDebug-DSA] Skipping: File does not have exactly 2 subtitle tracks (Found: $($allSubs.Count))" -ForegroundColor DarkGray }
@@ -1381,9 +1387,9 @@ foreach ($folderPath in $targetFolders) {
                                                     $isAlreadyHon = ($ambiguousTracks[$i].properties.language -eq "enm" -and $detected -eq "eng")
                                                     
                                                     if (-not $isAlreadyHon -and $ambiguousTracks[$i].properties.language -ne $detected -and $detected -ne "und") {
-                                                        if ($DevDebug) { Write-Host "  [DevDebug-DSA] Lng Fix: Track $($ambiguousTracks[$i].id) ($($ambiguousTracks[$i].properties.language) -> $detected)" -ForegroundColor DarkYellow }
-                                                        $ambiguousTracks[$i].properties.language = $detected
-                                                        if ($Fix) { $Params += @('--edit', "track:$($ambiguousTracks[$i].id + 1)", '--set', "language=$detected") }
+                                                        if ($DevDebug) { Write-Host "  [DevDebug-DSA] Lng Fix: Track $($ambiguousTracks[$i].id) ($($ambiguousTracks[$i].properties.language) -> $detected)" -ForegroundColor Yellow }
+                                                        # Store detection in a recommendation property instead of overwriting memory
+                                                        $ambiguousTracks[$i].properties | Add-Member -NotePropertyName "DSA_DetectedLang" -NotePropertyValue $detected -Force
                                                     }
                                                 }
                                             }
@@ -1419,15 +1425,6 @@ foreach ($folderPath in $targetFolders) {
                                 }
 
                                 # --- STAGE 3: DECISION LOGIC ---
-                                
-                                # [TRUTH CAPTURE] Store original names before any logic or memory sync occurs
-                                if ($null -eq $dsaCtx.OriginalNames) {
-                                    $dsaCtx | Add-Member -NotePropertyName "OriginalNames" -NotePropertyValue @{} -Force
-                                    foreach ($ambTrack in $ambiguousTracks) {
-                                        $raw = $ambTrack.properties.track_name
-                                        $dsaCtx.OriginalNames[$ambTrack.id] = if ([string]::IsNullOrWhiteSpace($raw)) { "[None]" } else { $raw }
-                                    }
-                                }
                                 
                                 $w1 = $dsaCtx.Weights[$ambiguousTracks[0].id]
                                 $w2 = $dsaCtx.Weights[$ambiguousTracks[1].id]
@@ -1524,6 +1521,10 @@ foreach ($folderPath in $targetFolders) {
                                         }
                                     } elseif ($ratio -ge $dynRatio -and -not $isDualEng) {
                                         if ($DevDebug -and $t.id -eq $ambiguousTracks[0].id) { Write-Host "  [DevDebug-DSA] Sizing valid ($($ratio.ToString('F2'))), but tracks are not Dual-English. Skipping Naming." -ForegroundColor DarkYellow }
+                                    } else {
+                                        if ($DevDebug -and $t.id -eq $ambiguousTracks[0].id) { 
+                                            Write-Host "  [DevDebug-DSA] Ratio too low ($($ratio.ToString('F2'))). Skipping Naming/Swap decision." -ForegroundColor DarkGray 
+                                        }
                                     }
                                 }
                             }
@@ -1646,14 +1647,20 @@ foreach ($folderPath in $targetFolders) {
                     
                     # 1. Validation Logic
                     # Determine the "Correct" target language for this specific winner
-                    # If it's an honorifics track, we standardize to 'enm'. Otherwise, use the user preference.
-                    $honRegex = "(?<!no\s|non-|without\s|removed\s)(honorifics|honors)"
-                    $isWinnerHon = ($winner.Name -match $honRegex) -or ($winner.Lang -eq "enm")
+                    $honRegex = "(?<!no\s|non-|without\s|removed\s)(honorific|honor)"
+                    
+                    # Look for the DSA recommendation first
+                    $dsaDetected = ($currentGroup.Json.tracks | Where-Object { $_.id -eq $winner.ID }).properties.DSA_DetectedLang
+                    
+                    $isWinnerHon = ($winner.Name -match $honRegex) -or ($winner.Lang -eq "enm") -or ($null -ne $dsaDetected)
                     $correctLangForWinner = if ($Honorifics -and $isWinnerHon) { "enm" } elseif ($winner.Lang -eq "enm") { "enm" } else { $targetSubLang }
                     
+                    # [TRUTH CHECK] Compare against the ORIGINAL language from disk to avoid "Memory-only" fixes
+                    $originalLang = if ($dsaCtx.OriginalLangs) { $dsaCtx.OriginalLangs[$winner.ID] } else { $currentWinnerData.properties.language }
+                    
                     # PROTECTION: Change label if current doesn't match Correct AND it's a "promotable" source (und/enm/name-match)
-                    $langNeedsFix = ($currentWinnerData.properties.language -ne $correctLangForWinner) -and 
-                                    (($currentWinnerData.properties.language -eq "und") -or $isWinnerHon)
+                    $langNeedsFix = ($originalLang -ne $correctLangForWinner) -and 
+                                    (($originalLang -eq "und") -or $isWinnerHon)
                     
                     # PREFERRED OR NOTHING: Only set default if Lang matches target OR is an honorifics variant
                     $isWinnerValidForDefault = ($winner.Lang -eq $targetSubLang) -or ($winner.Lang -eq "und") -or $isWinnerHon
@@ -1714,7 +1721,11 @@ foreach ($folderPath in $targetFolders) {
                                 
                                 # Strip default and forced flags only
                                 $Params += @('--edit', "track:$loseID", '--set', "flag-default=0", '--set', "flag-forced=0")
-                            
+                                
+                                # If DSA found honorifics on this loser track, update its language too
+                                if ($Honorifics -and $lostTrack.properties.DSA_DetectedLang -eq "enm" -and $lostTrack.properties.language -ne "enm") {
+                                    $Params += @('--set', "language=enm")
+                                }
                             }
                         } # Closes foreach
                     } # Closes Mechanical Trigger
