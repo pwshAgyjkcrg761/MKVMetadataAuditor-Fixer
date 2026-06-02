@@ -1,6 +1,6 @@
 # ==============================================================================
 # MODULE: MKVMetadataAuditor+Fixer.Fixer.ps1
-# VERSION: 2026.06.02__11.48.00
+# VERSION: 2026.06.02__16.03.00
 # ==============================================================================
 
 function Invoke-MkvBackup {
@@ -105,7 +105,11 @@ function Get-TrackScore {
     # 5. Language Scoring
     $isPrefLang = ($trackLang -eq $fixerConfig.Subtitles.PreferredLanguage)
     $honRegex = "(?<!no\s|non-|without\s|removed\s|no-)(honorific|honor)"
-    $isHonorificsTrack = ($trackLang -eq "enm") -or ($trackName -match $honRegex)
+    
+    # Check for DSA detection note in the properties
+    $dsaDetected = $t.properties.DSA_DetectedLang
+    $isHonorificsTrack = ($trackLang -eq "enm") -or ($trackName -match $honRegex) -or ($null -ne $dsaDetected)
+    
     
     if (-not $isPrefLang -and $Honorifics -and $fixerConfig.Subtitles.PreferredLanguage -eq "eng" -and $isHonorificsTrack) {
         $isPrefLang = $true
