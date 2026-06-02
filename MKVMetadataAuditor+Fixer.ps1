@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: MKVMetadataAuditor+Fixer.ps1
-# VERSION: 2026.06.01__21.40.00
+# VERSION: 2026.06.02__10.45.00
 # TARGET: PowerShell 7.6.2 LTS
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -113,7 +113,7 @@ param (
 )
 
 # --- GLOBAL VERSION DEFINITION ---
-$scriptVersion = "2026.06.01__21.40.00"
+$scriptVersion = "2026.06.02__10.45.00"
 
 # --- VERSION REPORTER ---
 if ($Version) {
@@ -265,7 +265,7 @@ if ($missingTools.Count -gt 0) {
 
 # [CHANGE] v2026.05.29__15.11.02 - Debug Tool Path Visibility
 if ($DevDebug) {
-    Write-Host "`n [DEBUG] Tool Discovery:" -ForegroundColor DarkYellow
+    Write-Host "`n [DevDebug-Main] Tool Discovery:" -ForegroundColor DarkYellow
     Write-Host "  -> mkvmerge:    $mkvmerge" -ForegroundColor Gray
     Write-Host "  -> mkvpropedit: $mkvpropedit" -ForegroundColor Gray
     Write-Host "  -> mkvextract:  $mkvextract" -ForegroundColor Gray
@@ -312,12 +312,13 @@ $mLogDir = Join-Path $rootLog "Mismatch_Logs"; $cLogDir = Join-Path $rootLog "Co
 $fLogDir = Join-Path $rootLog "FIX_QUEUE"
 $h10pLogDir = Join-Path $rootLog "AVC_High_10_Profile_Logs"
 $vLogDir = Join-Path $rootLog "Updates_Verification_Logs"
+$tLogDir = Join-Path $rootLog "DevDebug-Terminal_Logs"
 
 # Define the timestamp once for all logs
 $ts = Get-Date -Format "yyyy-MM-dd_HH-mm-ss"
 
 # Create the folders
-foreach ($dir in @($rootLog,$pLogDir,$dLogDir,$mLogDir,$cLogDir,$fLogDir,$h10pLogDir,$vLogDir)) { 
+foreach ($dir in @($rootLog,$pLogDir,$dLogDir,$mLogDir,$cLogDir,$fLogDir,$h10pLogDir,$vLogDir,$tLogDir)) { 
     if (-not (Test-Path $dir)) { New-Item $dir -ItemType Directory | Out-Null } 
 }
 
@@ -329,6 +330,12 @@ $compLog = Join-Path $cLogDir "MKVMetadataAuditor+Fixer_Comparison_$($ts)-log.tx
 $fixerLog = Join-Path $fLogDir "MKVMetadataAuditor+Fixer_FIX_QUEUE_$($ts)-log.txt"
 $h10pLog = Join-Path $h10pLogDir "MKVMetadataAuditor+Fixer_AVC_High_10_$($ts)-log.txt"
 $verifyLog = Join-Path $vLogDir "MKVMetadataAuditor+Fixer_Updates_Verification_$($ts)-log.txt"
+$terminalLog = Join-Path $tLogDir "MKVMetadataAuditor+Fixer_DevDebug-Terminal_$($ts)-log.txt"
+
+# --- START TERMINAL CAPTURE ---
+if ($DevDebug) {
+    Start-Transcript -Path $terminalLog -Append -Force | Out-Null
+}
 
 # --- GLOBAL TEMP CONFIGURATION ---
 $script:GlobalTemp = Join-Path $env:TEMP "MKVMetadataAuditor+Fixer"
@@ -855,8 +862,8 @@ foreach ($folderPath in $targetFolders) {
             # Write-Progress -Activity "Total Session Progress" -Status $statusMsg -PercentComplete $percent
             # If debugging, ensure we move to a new line so the bar remains visible
             if ($DevDebug) { 
-                Write-Host "`n [DEBUG] File Path: $($f.FullName)" -ForegroundColor Gray
-                Write-Host " [DEBUG] File Name: $($f.Name)" -ForegroundColor DarkGray 
+                Write-Host "`n [DevDebug-H10P] File Path: $($f.FullName)" -ForegroundColor Gray
+                Write-Host " [DevDebug-H10P] File Name: $($f.Name)" -ForegroundColor DarkGray
             }
             if (Test-IsHigh10 -FilePath $f.FullName -MediaInfoPath $mediainfo) {
                 $h10pCount++
@@ -931,8 +938,8 @@ foreach ($folderPath in $targetFolders) {
             Write-InlineProgress -Current ($i + 1) -Total $mkvCount -Message "Analyzing Files"
             
             if ($DevDebug) {
-                Write-Host "`n`n`n [DEBUG] File Path: $($f.FullName)" -ForegroundColor Gray
-                Write-Host " [DEBUG] File Name: $($f.Name)" -ForegroundColor DarkGray
+                Write-Host "`n`n`n [DevDebug-Main] File Path: $($f.FullName)" -ForegroundColor Gray
+                Write-Host " [DevDebug-Main] File Name: $($f.Name)" -ForegroundColor DarkGray
             }
             
             # 2. Log path to file
@@ -950,9 +957,8 @@ foreach ($folderPath in $targetFolders) {
             
             # Signature Debugging
             if ($DevDebug) {
-                Write-Host " [DEBUG] Generating Track Signature..." -ForegroundColor DarkCyan
+                Write-Host " [DevDebug-Main] Generating Track Signature..." -ForegroundColor DarkCyan
                 $sig.Split("`n") | ForEach-Object { Write-Host "    $($_.Trim())" -ForegroundColor Gray }
-                Write-Host "`n"
             }
             
             # --- SEPARATE AVC HIGH 10 SEARCH ---
@@ -1269,7 +1275,10 @@ foreach ($folderPath in $targetFolders) {
                                 
                                 # ELIGIBILITY: Exactly 2 text tracks with matching codecs required 
                                 if ($textSubs.Count -eq 2 -and ($textSubs[0].codec -eq $textSubs[1].codec)) {
-                                    if ($DevDebug) { Write-Host "  [DSA] Discovery: Found 2 text tracks. Initializing Analysis for: $($fToFix.Name)" -ForegroundColor Cyan }
+                                    if ($DevDebug) { 
+                                        Write-Host "  [DevDebug-DSA] Checking file at path: $($fToFix.FullName)" -ForegroundColor Gray
+                                        Write-Host "  [DevDebug-DSA] Discovery: Found 2 text tracks. Initializing Analysis for: $($fToFix.Name)" -ForegroundColor Cyan 
+                                    }
                                     $currentGroup | Add-Member -MemberType NoteProperty -Name $fileGuid -Value @{ "Tracks" = $textSubs; "Weights" = @{} } -Force
                                 } else {
                                     # LOGIC: If file doesn't have exactly 2 text tracks, mark as ineligible to save CPU on next loop
@@ -1300,12 +1309,12 @@ foreach ($folderPath in $targetFolders) {
                                                 $isHeaderDualEng = ($ambiguousTracks[0].properties.language -eq "eng" -and $ambiguousTracks[1].properties.language -eq "eng")
                                                 
                                                 if ($isHeaderDualEng) {
-                                                    if ($DevDebug) { Write-Host "  [DSA] Header Probe SUCCESS (Ratio: $($hRatio.ToString('F2')))" -ForegroundColor Green }
+                                                    if ($DevDebug) { Write-Host "  [DevDebug-DSA] Header Probe SUCCESS (Ratio: $($hRatio.ToString('F2')))" -ForegroundColor Green }
                                                     $w1 = $h1; $w2 = $h2; $isResolved = $true
                                                 } else {
                                                     # If languages are mixed (e.g. JPN/ENG), we don't trust the header. 
                                                     # By NOT setting $isResolved, we force the Stage 2 Extraction to run and verify the language.
-                                                    if ($DevDebug) { Write-Host "  [DSA] Header Ratio Valid ($($hRatio.ToString('F2'))), but Language Mismatch detected. Forcing Extraction Probe..." -ForegroundColor DarkYellow }
+                                                    if ($DevDebug) { Write-Host "  [DevDebug-DSA] Header Ratio Valid ($($hRatio.ToString('F2'))), but Language Mismatch detected. Forcing Extraction Probe..." -ForegroundColor DarkYellow }
                                                 }
                                             }
                                         }
@@ -1353,7 +1362,7 @@ foreach ($folderPath in $targetFolders) {
                                                     $isAlreadyHon = ($ambiguousTracks[$i].properties.language -eq "enm" -and $detected -eq "eng")
                                                     
                                                     if (-not $isAlreadyHon -and $ambiguousTracks[$i].properties.language -ne $detected -and $detected -ne "und") {
-                                                        if ($DevDebug) { Write-Host "  [DSA] Lng Fix: Track $($ambiguousTracks[$i].id) ($($ambiguousTracks[$i].properties.language) -> $detected)" -ForegroundColor DarkCyan }
+                                                        if ($DevDebug) { Write-Host "  [DevDebug-DSA] Lng Fix: Track $($ambiguousTracks[$i].id) ($($ambiguousTracks[$i].properties.language) -> $detected)" -ForegroundColor DarkYellow }
                                                         $ambiguousTracks[$i].properties.language = $detected
                                                         if ($Fix) { $Params += @('--edit', "track:$($ambiguousTracks[$i].id + 1)", '--set', "language=$detected") }
                                                     }
@@ -1363,14 +1372,14 @@ foreach ($folderPath in $targetFolders) {
                                             $b1 = (Get-Item $probeFile1).Length; $b2 = (Get-Item $probeFile2).Length
                                             $bRatio = [Math]::Max($b1, $b2) / [Math]::Max(1, [Math]::Min($b1, $b2))
                                             if ($bRatio -ge $targetRatio) {
-                                                if ($DevDebug) { Write-Host "  [DSA] Bitstream Probe SUCCESS (Ratio: $($bRatio.ToString('F2')))" -ForegroundColor Green }
+                                                if ($DevDebug) { Write-Host "  [DevDebug-DSA] Bitstream Probe SUCCESS (Ratio: $($bRatio.ToString('F2')))" -ForegroundColor Green }
                                                 $w1 = $b1; $w2 = $b2; $isResolved = $true
                                             } else {
-                                                if ($DevDebug) { Write-Host "  [DSA] Bitstream ratio too low ($($bRatio.ToString('F2'))). Performing Text-Only Deep Probe..." -ForegroundColor DarkCyan }
+                                                if ($DevDebug) { Write-Host "  [DevDebug-DSA] Bitstream ratio too low ($($bRatio.ToString('F2'))). Performing Text-Only Deep Probe..." -ForegroundColor DarkCyan }
                                                 $w1 = $clean1.Length; $w2 = $clean2.Length
                                                 $tRatio = if ($w1 -gt 0 -and $w2 -gt 0) { [Math]::Max($w1, $w2) / [Math]::Max(1, [Math]::Min($w1, $w2)) } else { 0 }
                                                 if ($tRatio -ge 2.0) {
-                                                    if ($DevDebug) { Write-Host "  [DSA] Text Probe SUCCESS (Ratio: $($tRatio.ToString('F2')))" -ForegroundColor Green }
+                                                    if ($DevDebug) { Write-Host "  [DevDebug-DSA] Text Probe SUCCESS (Ratio: $($tRatio.ToString('F2')))" -ForegroundColor Green }
                                                     $isResolved = $true; $targetRatio = 2.0
                                                 }
                                             }
@@ -1378,8 +1387,8 @@ foreach ($folderPath in $targetFolders) {
 
                                         # --- CLEANUP / PRESERVATION ---
                                         if ($DevDebug) {
-                                            Write-Host "    [DEBUG] Final Weight ID:$id1 ($w1) | ID:$id2 ($w2)" -ForegroundColor Gray
-                                            Write-Host "    [DEBUG] Preservation Active: Files kept at -> $tempDir" -ForegroundColor DarkCyan
+                                            Write-Host "    [DevDebug-DSA] Final Weight ID:$id1 ($w1) | ID:$id2 ($w2)" -ForegroundColor Gray
+                                            Write-Host "    [DevDebug-DSA] Preservation Active: Files kept at -> $tempDir" -ForegroundColor DarkCyan
                                         } else {
                                             # Standard Mode: Clean up extraction artifacts immediately
                                             if (Test-Path $tempDir) { Remove-Item $tempDir -Recurse -Force -ErrorAction SilentlyContinue }
@@ -1423,6 +1432,12 @@ foreach ($folderPath in $targetFolders) {
                                         # CONDITION 1: SWAP REQUIRED
                                         if (($nameL -match $script:RegexSign) -and ($nameS -match $script:RegexDiag)) {
                                             $needsChange = $true
+                                            
+                                            if ($DevDebug) {
+                                                Write-Host "  [DevDebug-DSA] Found ID:$($largeTrack.id) Name: $($largeTrack.properties.track_name)" -ForegroundColor Gray
+                                                Write-Host "  [DevDebug-DSA] Found ID:$($smallTrack.id) Name: $($smallTrack.properties.track_name)" -ForegroundColor Gray
+                                            }
+                                            
                                             # SAFETY: Using Add-Member to inject the Handled flag into the JSON object
                                             $largeTrack.properties | Add-Member -NotePropertyName "DSA_Handled" -NotePropertyValue $true -Force
                                             $smallTrack.properties | Add-Member -NotePropertyName "DSA_Handled" -NotePropertyValue $true -Force
@@ -1435,6 +1450,12 @@ foreach ($folderPath in $targetFolders) {
                                         # CONDITION 2: MISLABELED / GARBAGE / MISSING
                                         elseif (-not $hasDiagL -or -not $hasSignS) {
                                             $needsChange = $true
+                                            
+                                            if ($DevDebug) {
+                                                Write-Host "  [DevDebug-DSA] Found ID:$($largeTrack.id) Name: [$($largeTrack.properties.track_name)]" -ForegroundColor Gray
+                                                Write-Host "  [DevDebug-DSA] Found ID:$($smallTrack.id) Name: [$($smallTrack.properties.track_name)]" -ForegroundColor Gray
+                                            }
+                                            
                                             # SAFETY: Using Add-Member to inject the Handled flag into the JSON object
                                             $largeTrack.properties | Add-Member -NotePropertyName "DSA_Handled" -NotePropertyValue $true -Force
                                             $smallTrack.properties | Add-Member -NotePropertyName "DSA_Handled" -NotePropertyValue $true -Force
@@ -1451,6 +1472,9 @@ foreach ($folderPath in $targetFolders) {
                                             if ($Fix) {
                                                 $Params += @('--edit', "track:$($largeTrack.id + 1)", '--set', "name=$newNameL")
                                                 $Params += @('--edit', "track:$($smallTrack.id + 1)", '--set', "name=$newNameS")
+                                                # Update memory so the Scorer sees the new names immediately
+                                                $largeTrack.properties.track_name = $newNameL
+                                                $smallTrack.properties.track_name = $newNameS
                                             }
                                             $actionMsg = "[DSA] FIX: Corrected Garbage/Missing names (Large: '$newNameL', Small: '$newNameS')"
                                         }
@@ -1460,11 +1484,16 @@ foreach ($folderPath in $targetFolders) {
                                         }
 
                                         if ($t.id -eq $ambiguousTracks[0].id) {
-                                            if ($DevDebug) { Write-Host "  $actionMsg" -ForegroundColor Green }
+                                            if ($DevDebug) { 
+                                                # Replace [DSA] with [DevDebug-DSA] for the console output only
+                                                $consoleMsg = $actionMsg -replace '^\[DSA\]', '[DevDebug-DSA]'
+                                                $msgColor = if ($actionMsg -match "SWAP|FIX") { "DarkYellow" } else { "Green" }
+                                                Write-Host "  $consoleMsg" -ForegroundColor $msgColor 
+                                            }
                                             [void]$fixDetails.Add("  $actionMsg")
                                         }
                                     } elseif ($ratio -ge $dynRatio -and -not $isDualEng) {
-                                        if ($DevDebug -and $t.id -eq $ambiguousTracks[0].id) { Write-Host "  [DSA] Sizing valid ($($ratio.ToString('F2'))), but tracks are not Dual-English. Skipping Naming." -ForegroundColor Yellow }
+                                        if ($DevDebug -and $t.id -eq $ambiguousTracks[0].id) { Write-Host "  [DevDebug-DSA] Sizing valid ($($ratio.ToString('F2'))), but tracks are not Dual-English. Skipping Naming." -ForegroundColor DarkYellow }
                                     }
                                 }
                             }
@@ -1517,8 +1546,10 @@ foreach ($folderPath in $targetFolders) {
                 
                 # --- DEBUG: SCORING VISIBILITY ---
                 if ($DevDebug -and $subCandidates.Count -gt 0) {
-                    Write-Host "  [DEBUG] Subtitle Scoring Candidates:" -ForegroundColor Cyan
-                    [void]$fixDetails.Add("  [DEBUG] Subtitle Scoring Breakdown:")
+                    Write-Host "" # Gap between DSA and Fixer
+                    Write-Host "  [DevDebug-Fixer] Scoring file at path: $($fToFix.FullName)" -ForegroundColor Gray
+                    Write-Host "  [DevDebug-Fixer] Subtitle Scoring Candidates:" -ForegroundColor Cyan
+                    [void]$fixDetails.Add("  [DevDebug-Fixer] Subtitle Scoring Breakdown:")
                     foreach ($cand in ($subCandidates | Sort-Object Score -Descending)) {
                         # [CHANGE] v2026.05.29__15.58.42 - Include Sel in scoring debug telemetry
                         $msg = "    -> ID:$($cand.ID) | Sel:$($cand.Sel) | Score: $($cand.Score) | Lang: $($cand.Lang) | Rules: [$($cand.Rules)] | Name: $($cand.Name)"
@@ -1689,8 +1720,8 @@ foreach ($folderPath in $targetFolders) {
                     if ($targetFile -and (Test-Path -LiteralPath $targetFile)) {
                         if ($DevDebug) {
                             $fullCmd = "mkvpropedit `"$targetFile`" $($Params -join ' ')"
-                            Write-Host "  [DEBUG] $fullCmd" -ForegroundColor DarkYellow
-                            [void]$fixDetails.Add("  DEBUG_CMD: $fullCmd")
+                            Write-Host "  [DevDebug-Fixer] $fullCmd" -ForegroundColor DarkYellow
+                            [void]$fixDetails.Add("  DevDebug_CMD: $fullCmd")
                         }
                         & $mkvpropedit "$targetFile" @Params | Out-Null
                         $script:FilesModifiedInJob++
@@ -1706,7 +1737,7 @@ foreach ($folderPath in $targetFolders) {
     
     # --- STANDARD AUDITOR LOGGING ---
     # This only runs if $AvcHigh10Search is FALSE because of the 'continue' above
-    $spacer = "`r`n.• ♬ ͜͝ ̣̣♡.• ♬ ͜͝ ̣̣♡.• ♬ ͜͝ ̣̣♡..• ♬ ͜͝ ̣̣♡.• ♬ ͜͝ ̣̣♡.• ♬ ͜͝ ̣̣♡..• ♬ ͜͝ ̣̣♡.• ♬ ͜͝ ̣̣♡.• ♬ ͜͝ ̣̣♡.`r`n"
+    $spacer = "`r`n💜 • 💙 • 🦋 • ❤️ • 💛 • 🦋 • 💜 • 💙 • 🦋 • ❤️ • 💛 • 🦋 • 💜 • 💙 • 🦋 • ❤️ • 💛`r`n"
     $spacer | Out-File $detailLog -Append -Encoding utf8
     
     $compEntry = New-Object System.Collections.Generic.List[string]
@@ -1782,11 +1813,13 @@ Write-Host "Complete." -ForegroundColor DarkCyan
 # --- GLOBAL SESSION CLEANUP ---
 if (Test-Path $script:GlobalTemp) {
     if ($DevDebug) {
-        Write-Host " [DEBUG] Temp files preserved at: $script:GlobalTemp" -ForegroundColor DarkGray
+        Write-Host " [DevDebug-Main] Temp files preserved at: $script:GlobalTemp" -ForegroundColor DarkGray
     } else {
         # Standard Mode: Wipe the entire root temp folder on exit
         Remove-Item -LiteralPath $script:GlobalTemp -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
+
+if ($DevDebug) { Stop-Transcript | Out-Null }
 
 Pause
