@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: MKVMetadataAuditor+Fixer.ps1
-# VERSION: 2026.06.02__10.45.00
+# VERSION: 2026.06.02__14.37.16
 # TARGET: PowerShell 7.6.2 LTS
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -113,7 +113,7 @@ param (
 )
 
 # --- GLOBAL VERSION DEFINITION ---
-$scriptVersion = "2026.06.02__10.45.00"
+$scriptVersion = "2026.06.02__14.37.16"
 
 # --- VERSION REPORTER ---
 if ($Version) {
@@ -1269,19 +1269,38 @@ foreach ($folderPath in $targetFolders) {
                             # --- STAGE 1: DISCOVERY ---
                             if ($null -eq $currentGroup.PSObject.Properties[$fileGuid]) {
                                 $allSubs = $currentGroup.Json.tracks | Where-Object { $_.type -eq "subtitles" }
-                                
-                                # EXPANDED CODEC REGEX: Included 'SubStationAlpha' and 'SubRip' to ensure stylized subs trigger DSA
-                                $textSubs = $allSubs | Where-Object { ($_.codec -match "S_TEXT|UTF8|SRT|ASS|SSA|SubStationAlpha|SubRip|PGS|VobSub") }
-                                
-                                # ELIGIBILITY: Exactly 2 text tracks with matching codecs required 
-                                if ($textSubs.Count -eq 2 -and ($textSubs[0].codec -eq $textSubs[1].codec)) {
-                                    if ($DevDebug) { 
-                                        Write-Host "  [DevDebug-DSA] Checking file at path: $($fToFix.FullName)" -ForegroundColor Gray
-                                        Write-Host "  [DevDebug-DSA] Discovery: Found 2 text tracks. Initializing Analysis for: $($fToFix.Name)" -ForegroundColor Cyan 
+
+                                if ($DevDebug) {
+                                    Write-Host "  [DevDebug-DSA] Checking file at path: $($fToFix.FullName)" -ForegroundColor Gray
+                                    Write-Host "  [DevDebug-DSA] Scanning file: $($fToFix.Name) (Total Subs: $($allSubs.Count))" -ForegroundColor Gray
+                                }
+
+                                # ELIGIBILITY: Exactly 2 subtitle tracks required
+                                if ($allSubs.Count -eq 2) {
+                                    # Create broad codec strings for comparison (Checking both codec name and internal ID)
+                                    $c1 = ($allSubs[0].codec + " " + $allSubs[0].properties.codec_id).ToLower()
+                                    $c2 = ($allSubs[1].codec + " " + $allSubs[1].properties.codec_id).ToLower()
+                                    
+                                    $textPattern = "s_text|utf8|srt|ass|ssa|substationalpha|subrip"
+                                    $isText1 = $c1 -match $textPattern; $isText2 = $c2 -match $textPattern
+                                    $isPGS1  = $c1 -match "pgs";        $isPGS2  = $c2 -match "pgs"
+                                    $isVob1  = $c1 -match "vobsub";     $isVob2  = $c2 -match "vobsub"
+
+                                    # Success Criteria: Categories must match (Text/Text, PGS/PGS, or Vob/Vob)
+                                    $isCompatible = (($isText1 -and $isText2) -or ($isPGS1 -and $isPGS2) -or ($isVob1 -and $isVob2))
+
+                                    if ($isCompatible) {
+                                        $typeLabel = if ($isText1) { "Text/Text" } elseif ($isPGS1) { "PGS/PGS" } else { "VobSub/VobSub" }
+                                        if ($DevDebug) {
+                                            Write-Host "  [DevDebug-DSA] Discovery: Compatible pair found ($typeLabel). Initializing Analysis..." -ForegroundColor Cyan 
+                                        }
+                                        $currentGroup | Add-Member -MemberType NoteProperty -Name $fileGuid -Value @{ "Tracks" = $allSubs; "Weights" = @{} } -Force
+                                    } else {
+                                        if ($DevDebug) { Write-Host "  [DevDebug-DSA] Skipping: Category Mismatch (Codec 1: $c1 | Codec 2: $c2)" -ForegroundColor DarkGray }
+                                        $currentGroup | Add-Member -MemberType NoteProperty -Name $fileGuid -Value $null -Force
                                     }
-                                    $currentGroup | Add-Member -MemberType NoteProperty -Name $fileGuid -Value @{ "Tracks" = $textSubs; "Weights" = @{} } -Force
                                 } else {
-                                    # LOGIC: If file doesn't have exactly 2 text tracks, mark as ineligible to save CPU on next loop
+                                    if ($DevDebug) { Write-Host "  [DevDebug-DSA] Skipping: File does not have exactly 2 subtitle tracks (Found: $($allSubs.Count))" -ForegroundColor DarkGray }
                                     $currentGroup | Add-Member -MemberType NoteProperty -Name $fileGuid -Value $null -Force
                                 }
                             }
@@ -1400,6 +1419,16 @@ foreach ($folderPath in $targetFolders) {
                                 }
 
                                 # --- STAGE 3: DECISION LOGIC ---
+                                
+                                # [TRUTH CAPTURE] Store original names before any logic or memory sync occurs
+                                if ($null -eq $dsaCtx.OriginalNames) {
+                                    $dsaCtx | Add-Member -NotePropertyName "OriginalNames" -NotePropertyValue @{} -Force
+                                    foreach ($ambTrack in $ambiguousTracks) {
+                                        $raw = $ambTrack.properties.track_name
+                                        $dsaCtx.OriginalNames[$ambTrack.id] = if ([string]::IsNullOrWhiteSpace($raw)) { "[None]" } else { $raw }
+                                    }
+                                }
+                                
                                 $w1 = $dsaCtx.Weights[$ambiguousTracks[0].id]
                                 $w2 = $dsaCtx.Weights[$ambiguousTracks[1].id]
                                 $dynRatio = $currentGroup.PSObject.Properties[$fileGuid + "_Ratio"].Value
@@ -1433,28 +1462,22 @@ foreach ($folderPath in $targetFolders) {
                                         if (($nameL -match $script:RegexSign) -and ($nameS -match $script:RegexDiag)) {
                                             $needsChange = $true
                                             
-                                            if ($DevDebug) {
-                                                Write-Host "  [DevDebug-DSA] Found ID:$($largeTrack.id) Name: $($largeTrack.properties.track_name)" -ForegroundColor Gray
-                                                Write-Host "  [DevDebug-DSA] Found ID:$($smallTrack.id) Name: $($smallTrack.properties.track_name)" -ForegroundColor Gray
-                                            }
-                                            
                                             # SAFETY: Using Add-Member to inject the Handled flag into the JSON object
                                             $largeTrack.properties | Add-Member -NotePropertyName "DSA_Handled" -NotePropertyValue $true -Force
                                             $smallTrack.properties | Add-Member -NotePropertyName "DSA_Handled" -NotePropertyValue $true -Force
                                             if ($Fix) {
                                                 $Params += @('--edit', "track:$($largeTrack.id + 1)", '--set', "name=$nameS")
                                                 $Params += @('--edit', "track:$($smallTrack.id + 1)", '--set', "name=$nameL")
+
+                                                # Update memory safely (ensuring property exists)
+                                                $largeTrack.properties | Add-Member -NotePropertyName "track_name" -NotePropertyValue $nameS -Force
+                                                $smallTrack.properties | Add-Member -NotePropertyName "track_name" -NotePropertyValue $nameL -Force
                                             }
                                             $actionMsg = "[DSA] SWAP: Swapping '$nameS' to Large and '$nameL' to Small"
                                         }
                                         # CONDITION 2: MISLABELED / GARBAGE / MISSING
                                         elseif (-not $hasDiagL -or -not $hasSignS) {
                                             $needsChange = $true
-                                            
-                                            if ($DevDebug) {
-                                                Write-Host "  [DevDebug-DSA] Found ID:$($largeTrack.id) Name: [$($largeTrack.properties.track_name)]" -ForegroundColor Gray
-                                                Write-Host "  [DevDebug-DSA] Found ID:$($smallTrack.id) Name: [$($smallTrack.properties.track_name)]" -ForegroundColor Gray
-                                            }
                                             
                                             # SAFETY: Using Add-Member to inject the Handled flag into the JSON object
                                             $largeTrack.properties | Add-Member -NotePropertyName "DSA_Handled" -NotePropertyValue $true -Force
@@ -1472,9 +1495,10 @@ foreach ($folderPath in $targetFolders) {
                                             if ($Fix) {
                                                 $Params += @('--edit', "track:$($largeTrack.id + 1)", '--set', "name=$newNameL")
                                                 $Params += @('--edit', "track:$($smallTrack.id + 1)", '--set', "name=$newNameS")
-                                                # Update memory so the Scorer sees the new names immediately
-                                                $largeTrack.properties.track_name = $newNameL
-                                                $smallTrack.properties.track_name = $newNameS
+                                                
+                                                # Update memory safely (ensuring property exists)
+                                                $largeTrack.properties | Add-Member -NotePropertyName "track_name" -NotePropertyValue $newNameL -Force
+                                                $smallTrack.properties | Add-Member -NotePropertyName "track_name" -NotePropertyValue $newNameS -Force
                                             }
                                             $actionMsg = "[DSA] FIX: Corrected Garbage/Missing names (Large: '$newNameL', Small: '$newNameS')"
                                         }
@@ -1485,6 +1509,12 @@ foreach ($folderPath in $targetFolders) {
 
                                         if ($t.id -eq $ambiguousTracks[0].id) {
                                             if ($DevDebug) { 
+                                                # If a change is needed, show the original names first as a header
+                                                if ($actionMsg -match "SWAP|FIX") {
+                                                    Write-Host "  [DevDebug-DSA] Found ID:$($ambiguousTracks[0].id) Name: $($dsaCtx.OriginalNames[$ambiguousTracks[0].id])" -ForegroundColor Gray
+                                                    Write-Host "  [DevDebug-DSA] Found ID:$($ambiguousTracks[1].id) Name: $($dsaCtx.OriginalNames[$ambiguousTracks[1].id])" -ForegroundColor Gray
+                                                }
+
                                                 # Replace [DSA] with [DevDebug-DSA] for the console output only
                                                 $consoleMsg = $actionMsg -replace '^\[DSA\]', '[DevDebug-DSA]'
                                                 $msgColor = if ($actionMsg -match "SWAP|FIX") { "DarkYellow" } else { "Green" }
