@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: MKVMetadataAuditor+Fixer.ps1
-# VERSION: 2026.06.01__15.25.00
+# VERSION: 2026.06.01__21.40.00
 # TARGET: PowerShell 7.6.2 LTS
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -113,7 +113,7 @@ param (
 )
 
 # --- GLOBAL VERSION DEFINITION ---
-$scriptVersion = "2026.06.01__15.25.00"
+$scriptVersion = "2026.06.01__21.40.00"
 
 # --- VERSION REPORTER ---
 if ($Version) {
@@ -1267,8 +1267,8 @@ foreach ($folderPath in $targetFolders) {
                                 # EXPANDED CODEC REGEX: Included 'SubStationAlpha' and 'SubRip' to ensure stylized subs trigger DSA
                                 $textSubs = $allSubs | Where-Object { ($_.codec -match "S_TEXT|UTF8|SRT|ASS|SSA|SubStationAlpha|SubRip|PGS|VobSub") }
                                 
-                                # ELIGIBILITY: Exactly 2 text tracks required
-                                if ($textSubs.Count -eq 2) {
+                                # ELIGIBILITY: Exactly 2 text tracks with matching codecs required 
+                                if ($textSubs.Count -eq 2 -and ($textSubs[0].codec -eq $textSubs[1].codec)) {
                                     if ($DevDebug) { Write-Host "  [DSA] Discovery: Found 2 text tracks. Initializing Analysis for: $($fToFix.Name)" -ForegroundColor Cyan }
                                     $currentGroup | Add-Member -MemberType NoteProperty -Name $fileGuid -Value @{ "Tracks" = $textSubs; "Weights" = @{} } -Force
                                 } else {
