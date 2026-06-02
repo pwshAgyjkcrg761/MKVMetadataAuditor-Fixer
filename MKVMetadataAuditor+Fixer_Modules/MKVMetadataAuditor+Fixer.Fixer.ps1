@@ -1,6 +1,6 @@
 # ==============================================================================
 # MODULE: MKVMetadataAuditor+Fixer.Fixer.ps1
-# VERSION: 2026.06.01__13.06.00
+# VERSION: 2026.06.02__08.04.00
 # ==============================================================================
 
 function Invoke-MkvBackup {
@@ -142,11 +142,16 @@ function Get-TrackScore {
     }
     
     if ($Western) {
-        if ($trackLang -eq $fixerConfig.Subtitles.PreferredLanguage -and -not $t.properties.forced_track -and $trackName -notmatch "Sign|Song|Lyric") {
-            $score += 200 
-            [void]$ruleLog.Add("WesternFullSub(+200)")
-        }
+    # Tighten logic: Must look like Dialogue AND not look like a Sign
+    $isDialogue = ($trackName -match $RegexDiag -or [string]::IsNullOrWhiteSpace($trackName))
+    $isSign = ($trackName -match $RegexSign)
+
+    if ($trackLang -eq $fixerConfig.Subtitles.PreferredLanguage -and -not $t.properties.forced_track -and $isDialogue -and -not $isSign) {
+        $score += 200 
+        $langLabel = ($trackLang[0].ToString().ToUpper() + $trackLang.Substring(1).ToLower())
+        [void]$ruleLog.Add("${langLabel}FullSub(+200)")
     }
+}
 
     return [PSCustomObject]@{ Score = $score; Rules = ($ruleLog -join ' | ') }
 }
