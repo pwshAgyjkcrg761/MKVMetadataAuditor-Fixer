@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: MKVMetadataAuditor+Fixer.ps1
-# VERSION: 2026.06.02__16.03.00
+# VERSION: 2026.06.02__22.19.23
 # TARGET: PowerShell 7.6.2 LTS
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -113,7 +113,7 @@ param (
 )
 
 # --- GLOBAL VERSION DEFINITION ---
-$scriptVersion = "2026.06.02__16.03.00"
+$scriptVersion = "2026.06.02__22.19.23"
 
 # --- VERSION REPORTER ---
 if ($Version) {
@@ -737,10 +737,11 @@ function Write-InlineProgress {
     $bar = ("█" * $done) + ("░" * $left)
     # Using ${Message} ensures the colon is treated as plain text
     # PadRight(100) ensures the entire line is cleared before writing the new one
-    $progressLine = "`r[SHIELD] ${Message}: [$bar] $percent% ($Current/$Total)".PadRight(100)
+    # [FIX] v2026.06.02_22.09.00 - Standardized flat line sequential padding for safe terminal streaming
+    $progressLine = "[SHIELD] ${Message}: [$bar] $percent% ($Current/$Total)".PadRight(120)
 
     
-    Write-Host -NoNewline $progressLine -ForegroundColor Cyan
+    Write-Host "`n$progressLine`n" -ForegroundColor Cyan
 }
 
 # 3. Main Processing Loop
@@ -935,7 +936,9 @@ foreach ($folderPath in $targetFolders) {
         for ($i = 0; $i -lt $mkvCount; $i++) {
             $f = $mkvFiles[$i]
             # 1. Update the user with the progress bar immediately
-            Write-InlineProgress -Current ($i + 1) -Total $mkvCount -Message "Analyzing Files"
+            # [FIX] v2026.06.02_22.09.00 - Assign mode message string for analyzer
+            $analyzerMsg = if ($CurrentJob.Mode -eq "Verification") { "Verifying Updates" } else { "Analyzing Files" }
+            Write-InlineProgress -Current ($i + 1) -Total $mkvCount -Message $analyzerMsg
             
             if ($DevDebug) {
                 Write-Host "`n`n`n [DevDebug-Main] File Path: $($f.FullName)" -ForegroundColor Gray
@@ -947,6 +950,7 @@ foreach ($folderPath in $targetFolders) {
             
             # 3. Get JSON and build signature
             $json = & $mkvmerge -J $f.FullName | ConvertFrom-Json
+            $f | Add-Member -NotePropertyName "PristineJson" -NotePropertyValue $json -Force
             # [CHANGE] v2026.05.29__15.48.15 - Add Selector (Sel) to Audit Signature
             Get-AuditSelector -Reset
             $sig = (($json.tracks | ForEach-Object { 
@@ -982,6 +986,7 @@ foreach ($folderPath in $targetFolders) {
                 $existingGroup = $orderedGroups[-1]
             }
             $existingGroup.Files.Add($f)
+            $f | Add-Member -NotePropertyName "ParentGroup" -NotePropertyValue $existingGroup -Force
         }
         
         # v2026.05.13_10.43.00 - Real-time Console Feedback
@@ -1148,9 +1153,42 @@ foreach ($folderPath in $targetFolders) {
             if ($mismatches -gt 0) {
                 $entry | Out-File $missLog -Append -Encoding utf8
             }
+        } # <--- END GROUPS LOOP
+
+        # --- GENERATE FIXER QUEUE & EXECUTE SMART FIX (SEQUENTIAL) ---
+        $fixProgressCounter = 0
+        foreach ($fToFix in $mkvFiles) {
+            $fixProgressCounter++
+            # [FIX] v2026.06.02_22.09.00 - Dynamic mode reader to eliminate inaccurate labels across passes
+            $runProgressLabel = if ($CurrentJob.Mode -eq "Verification") { "Verifying Codec State" } elseif ($IsFixRun) { "Applying Fixes" } else { "Auditing Layout" }
+            Write-InlineProgress -Current $fixProgressCounter -Total $mkvCount -Message $runProgressLabel
+        
+
+            $currentGroup = $fToFix.ParentGroup
             
-            # --- GENERATE FIXER QUEUE & EXECUTE SMART FIX ---
-            foreach ($fToFix in $currentGroup.Files) {
+            # [FIX] v2026.06.02 - Restore original file state to shared memory using direct assignment
+            $fileGuid = "DSA_" + $fToFix.Name.GetHashCode().ToString('X')
+            $dsaCtx = $currentGroup.PSObject.Properties[$fileGuid].Value
+
+            foreach ($track in $fToFix.PristineJson.tracks) {
+                # Clean up temporary DSA flags
+                $track.PSObject.Properties.Remove("DSA_DetectedLang")
+                    if ($track.properties.PSObject.Properties["DSA_Handled"]) { 
+                        $track.properties.PSObject.Properties.Remove("DSA_Handled") 
+                    }
+                    
+                    # Revert track name and language to original values from disk before evaluation
+                    if ($null -ne $dsaCtx) {
+                        if ($dsaCtx.OriginalNames.ContainsKey($track.id)) {
+                            $orig = $dsaCtx.OriginalNames[$track.id]
+                            $track.properties.track_name = if ($orig -eq "[None]") { "" } else { $orig }
+                        }
+                        if ($dsaCtx.OriginalLangs.ContainsKey($track.id)) {
+                            $track.properties.language = $dsaCtx.OriginalLangs[$track.id]
+                        }
+                    }
+                }
+
                 # 1. Initialize the list FIRST so we can log skips to it
                 $fixDetails = New-Object System.Collections.Generic.List[string]
                 $Params = @() 
@@ -1159,11 +1197,11 @@ foreach ($folderPath in $targetFolders) {
                 $subCandidates = @()
                 
                 # 2. Define videoCount
-                $videoCount = ($currentGroup.Json.tracks | Where-Object { $_.type -eq "video" } | Measure-Object).Count
+                $videoCount = ($fToFix.PristineJson.tracks | Where-Object { $_.type -eq "video" } | Measure-Object).Count
                 
                 # --- [AUDIO FORCE PRE-CHECK] ---
-                $undAudioCount = ($currentGroup.Json.tracks | Where-Object { $_.type -eq "audio" -and $_.properties.language -eq "und" } | Measure-Object).Count
-                $totalAudioCount = ($currentGroup.Json.tracks | Where-Object { $_.type -eq "audio" } | Measure-Object).Count
+                $undAudioCount = ($fToFix.PristineJson.tracks | Where-Object { $_.type -eq "audio" -and $_.properties.language -eq "und" } | Measure-Object).Count
+                $totalAudioCount = ($fToFix.PristineJson.tracks | Where-Object { $_.type -eq "audio" } | Measure-Object).Count
                 # Logic: Allow force if user provided -audf and it's a single-audio file (regardless of current lang)
                 $canForceAudio = ($audioLanguageUpdate -and $totalAudioCount -eq 1)
                 
@@ -1191,9 +1229,9 @@ foreach ($folderPath in $targetFolders) {
                 $subRelativeIndex = 0
                 
                 # NEW: Define videoCount here so the check below works
-                $videoCount = ($currentGroup.Json.tracks | Where-Object { $_.type -eq "video" } | Measure-Object).Count
+                $videoCount = ($fToFix.PristineJson.tracks | Where-Object { $_.type -eq "video" } | Measure-Object).Count
                 
-                foreach ($t in $currentGroup.Json.tracks) {
+                foreach ($t in $fToFix.PristineJson.tracks) {
                     $sel = Get-AuditSelector $t.type
                     
                     # --- VIDEO LOGIC ---
@@ -1268,7 +1306,7 @@ foreach ($folderPath in $targetFolders) {
                             
                             # --- STAGE 1: DISCOVERY ---
                             if ($null -eq $currentGroup.PSObject.Properties[$fileGuid]) {
-                                $allSubs = $currentGroup.Json.tracks | Where-Object { $_.type -eq "subtitles" }
+                                $allSubs = $fToFix.PristineJson.tracks | Where-Object { $_.type -eq "subtitles" }
 
                                 if ($DevDebug) {
                                     Write-Host "  [DevDebug-DSA] Checking file at path: $($fToFix.FullName)" -ForegroundColor Gray
@@ -1388,8 +1426,8 @@ foreach ($folderPath in $targetFolders) {
                                                     
                                                     if (-not $isAlreadyHon -and $ambiguousTracks[$i].properties.language -ne $detected -and $detected -ne "und") {
                                                         if ($DevDebug) { Write-Host "  [DevDebug-DSA] Lng Fix: Track $($ambiguousTracks[$i].id) ($($ambiguousTracks[$i].properties.language) -> $detected)" -ForegroundColor Yellow }
-                                                        # Store detection in a recommendation property instead of overwriting memory
-                                                        $ambiguousTracks[$i].properties | Add-Member -NotePropertyName "DSA_DetectedLang" -NotePropertyValue $detected -Force
+                                                        # Store detection directly on the track object instead of the nested properties
+                                                        $ambiguousTracks[$i] | Add-Member -NotePropertyName "DSA_DetectedLang" -NotePropertyValue $detected -Force
                                                     }
                                                 }
                                             }
@@ -1433,6 +1471,20 @@ foreach ($folderPath in $targetFolders) {
                                 if ($w1 -gt 0 -and $w2 -gt 0) {
                                     $ratio = [Math]::Max($w1, $w2) / [Math]::Min($w1, $w2)
                                     
+                                    # [FIX] v2026.06.02 - Re-verify role assignments from restored names
+                                    $largeTrack = if ($w1 -gt $w2) { $ambiguousTracks[0] } else { $ambiguousTracks[1] }
+                                    $smallTrack = if ($w1 -gt $w2) { $ambiguousTracks[1] } else { $ambiguousTracks[0] }
+                                    
+                                    # Pull names directly from properties to ensure we aren't using group-cached strings
+                                    $nameL = if ($largeTrack.properties.track_name) { $largeTrack.properties.track_name } else { "" }
+                                    $nameS = if ($smallTrack.properties.track_name) { $smallTrack.properties.track_name } else { "" }
+                                    
+                                    # [FIX] v2026.06.02 - Force Regex re-evaluation for every file to prevent boolean flag bleeding
+                                    $hasDiagL = $nameL -match $script:RegexDiag
+                                    $hasSignL = $nameL -match $script:RegexSign
+                                    $hasDiagS = $nameS -match $script:RegexDiag
+                                    $hasSignS = $nameS -match $script:RegexSign
+                                    
                                     # TRUTH CHECK: Use the detected languages (updated by Probe)
                                     # Naming/Swapping logic will ONLY proceed if both tracks are confirmed English.
                                     # For other languages (chi, kor, rus, etc.), the script will have already updated the 
@@ -1463,8 +1515,11 @@ foreach ($folderPath in $targetFolders) {
                                             $largeTrack.properties | Add-Member -NotePropertyName "DSA_Handled" -NotePropertyValue $true -Force
                                             $smallTrack.properties | Add-Member -NotePropertyName "DSA_Handled" -NotePropertyValue $true -Force
                                             if ($Fix) {
-                                                $Params += @('--edit', "track:$($largeTrack.id + 1)", '--set', "name=$nameS")
-                                                $Params += @('--edit', "track:$($smallTrack.id + 1)", '--set', "name=$nameL")
+                                                # [FIX] v2026.06.02 - Only add name parameters if they differ from current values
+                                                if ($nameS -ne $nameL) {
+                                                    $Params += @('--edit', "track:$($largeTrack.id + 1)", '--set', "name=$nameS")
+                                                    $Params += @('--edit', "track:$($smallTrack.id + 1)", '--set', "name=$nameL")
+                                                }
 
                                                 # Update memory safely (ensuring property exists)
                                                 $largeTrack.properties | Add-Member -NotePropertyName "track_name" -NotePropertyValue $nameS -Force
@@ -1473,7 +1528,8 @@ foreach ($folderPath in $targetFolders) {
                                             $actionMsg = "[DSA] SWAP: Swapping '$nameS' to Large and '$nameL' to Small"
                                         }
                                         # CONDITION 2: MISLABELED / GARBAGE / MISSING
-                                        elseif (-not $hasDiagL -or -not $hasSignS) {
+                                        # [FIX] v2026.06.02 - Added explicit check for "English Subtitles" to prevent false-positive Verification
+                                        elseif (-not $hasDiagL -or -not $hasSignS -or ($nameL -match "English Subtitles")) {
                                             $needsChange = $true
                                             
                                             # SAFETY: Using Add-Member to inject the Handled flag into the JSON object
@@ -1490,8 +1546,9 @@ foreach ($folderPath in $targetFolders) {
                                             if ($newNameL -eq $newNameS) { $newNameL = "Full Dialogue"; $newNameS = "Signs & Songs" }
 
                                             if ($Fix) {
-                                                $Params += @('--edit', "track:$($largeTrack.id + 1)", '--set', "name=$newNameL")
-                                                $Params += @('--edit', "track:$($smallTrack.id + 1)", '--set', "name=$newNameS")
+                                                # [FIX] v2026.06.02 - Only add name parameters if they differ from current values
+                                                if ($newNameL -ne $nameL) { $Params += @('--edit', "track:$($largeTrack.id + 1)", '--set', "name=$newNameL") }
+                                                if ($newNameS -ne $nameS) { $Params += @('--edit', "track:$($smallTrack.id + 1)", '--set', "name=$newNameS") }
                                                 
                                                 # Update memory safely (ensuring property exists)
                                                 $largeTrack.properties | Add-Member -NotePropertyName "track_name" -NotePropertyValue $newNameL -Force
@@ -1597,11 +1654,11 @@ foreach ($folderPath in $targetFolders) {
                         $sdhWinner = $subCandidates | Sort-Object Score -Descending | Select-Object -First 1
 
                         # Only promote if SDH was requested AND the winner actually is an SDH track
-                        $isActualSDH = ($sdhWinner.Name -match "SDH|HI|CC" -or ($currentGroup.Json.tracks | Where-Object { $_.id -eq $sdhWinner.ID }).properties.flag_hearing_impaired)
+                        $isActualSDH = ($sdhWinner.Name -match "SDH|HI|CC" -or ($fToFix.PristineJson.tracks | Where-Object { $_.id -eq $sdhWinner.ID }).properties.flag_hearing_impaired)
 
                         if ($sdhRequested -and $isActualSDH) {
                             $winID = $sdhWinner.ID + 1
-                            $isAlreadyHI = ($currentGroup.Json.tracks | Where-Object { $_.id -eq $sdhWinner.ID }).properties.flag_hearing_impaired
+                            $isAlreadyHI = ($fToFix.PristineJson.tracks | Where-Object { $_.id -eq $sdhWinner.ID }).properties.flag_hearing_impaired
                             
                             if (-not $sdhWinner.WasDefault -or -not $isAlreadyHI) {
                                 $Params += @('--edit', "track:$winID", '--set', "flag-default=1", '--set', "flag-forced=0", '--set', "flag-hearing-impaired=1")
@@ -1611,7 +1668,7 @@ foreach ($folderPath in $targetFolders) {
 
                             foreach ($sub in $subCandidates) {
                                 if ($sub.ID -ne $sdhWinner.ID) {
-                                    $lostTrack = $currentGroup.Json.tracks | Where-Object { $_.id -eq $sub.ID }
+                                    $lostTrack = $fToFix.PristineJson.tracks | Where-Object { $_.id -eq $sub.ID }
                                     # Strip default and forced flags from non-winners (Preserving HI Flag)
                                     if ($lostTrack.properties.default_track -or $lostTrack.properties.forced_track) {
                                         $loseID = $sub.ID + 1
@@ -1624,7 +1681,7 @@ foreach ($folderPath in $targetFolders) {
                         } else {
                             # Default Western behavior: Strip all subtitle flags
                             foreach ($sub in $subCandidates) {
-                                $thisTrack = $currentGroup.Json.tracks | Where-Object { $_.id -eq $sub.ID }
+                                $thisTrack = $fToFix.PristineJson.tracks | Where-Object { $_.id -eq $sub.ID }
                                 # Strip default and forced flags (Preserving HI Flag)
                                 if ($thisTrack.properties.default_track -or $thisTrack.properties.forced_track) {
                                     $loseID = $sub.ID + 1
@@ -1643,14 +1700,16 @@ foreach ($folderPath in $targetFolders) {
                     # $targetSubLang = "eng" 
                     $subReason = if ($Honorifics -and ($winner.Score -ge 100)) { "Preferred Honorifics ($($winner.Lang))" } else { "Primary ENG Sub" }
                     
-                    $currentWinnerData = $currentGroup.Json.tracks | Where-Object { $_.id -eq $winner.ID }
+                    $currentWinnerData = $fToFix.PristineJson.tracks | Where-Object { $_.id -eq $winner.ID }
                     
                     # 1. Validation Logic
                     # Determine the "Correct" target language for this specific winner
                     $honRegex = "(?<!no\s|non-|without\s|removed\s)(honorific|honor)"
                     
-                    # Look for the DSA recommendation first
-                    $dsaDetected = ($currentGroup.Json.tracks | Where-Object { $_.id -eq $winner.ID }).properties.DSA_DetectedLang
+                    # Look for the DSA recommendation directly on the track object
+                    $dsaDetected = ($fToFix.PristineJson.tracks | Where-Object { $_.id -eq $winner.ID }).DSA_DetectedLang
+                    
+                    
                     
                     $isWinnerHon = ($winner.Name -match $honRegex) -or ($winner.Lang -eq "enm") -or ($null -ne $dsaDetected)
                     $correctLangForWinner = if ($Honorifics -and $isWinnerHon) { "enm" } elseif ($winner.Lang -eq "enm") { "enm" } else { $targetSubLang }
@@ -1678,7 +1737,7 @@ foreach ($folderPath in $targetFolders) {
                     $losersNeedStrip = $false
                     foreach ($sub in $subCandidates) {
                         if ($sub.ID -ne $winner.ID) {
-                            $lostTrack = $currentGroup.Json.tracks | Where-Object { $_.id -eq $sub.ID }
+                            $lostTrack = $fToFix.PristineJson.tracks | Where-Object { $_.id -eq $sub.ID }
                             $hasSDH = $lostTrack.properties.name -like "*SDH*"
                             
                             if ($lostTrack.properties.default_track -or 
@@ -1692,12 +1751,13 @@ foreach ($folderPath in $targetFolders) {
                     }
 
                     # 3. MECHANICAL TRIGGER: If either condition is true, build the command
-                    if (($winnerNeedsFix -or $losersNeedStrip) -and -not $currentWinnerData.properties.DSA_Handled) {
+                    # Removed DSA_Handled block to allow Language fixes to 'stack' with DSA naming fixes
+                    if ($winnerNeedsFix -or $losersNeedStrip) {
                         $needsChange = $true
                         $winID = $winner.ID + 1
                         
-                        # LOGIC: Only apply language update if DSA hasn't handled it
-                        $langNeedsFix = ($currentWinnerData.properties.language -ne $correctLangForWinner) -and -not $currentWinnerData.properties.DSA_Handled
+                        # [FIX] v2026.06.02 - Allow language update even if DSA handled naming/swapping
+                        $langNeedsFix = ($currentWinnerData.properties.language -ne $correctLangForWinner)
                         
                     # Add Winner Fix
                     $Params += @('--edit', "track:$winID", '--set', "flag-default=$targetDefaultValue", '--set', "flag-forced=0")
@@ -1716,14 +1776,14 @@ foreach ($folderPath in $targetFolders) {
                     # Add Loser Strips (Preserving Name and HI Flag)
                         foreach ($sub in $subCandidates) {
                             if ($sub.ID -ne $winner.ID) {
-                                $lostTrack = $currentGroup.Json.tracks | Where-Object { $_.id -eq $sub.ID }
+                                $lostTrack = $fToFix.PristineJson.tracks | Where-Object { $_.id -eq $sub.ID }
                                 $loseID = $sub.ID + 1
                                 
                                 # Strip default and forced flags only
                                 $Params += @('--edit', "track:$loseID", '--set', "flag-default=0", '--set', "flag-forced=0")
                                 
-                                # If DSA found honorifics on this loser track, update its language too
-                                if ($Honorifics -and $lostTrack.properties.DSA_DetectedLang -eq "enm" -and $lostTrack.properties.language -ne "enm") {
+                                # [FIX] v2026.06.02 - Corrected property path for DSA metadata on non-winning tracks
+                                if ($Honorifics -and $lostTrack.DSA_DetectedLang -eq "enm" -and $lostTrack.properties.language -ne "enm") {
                                     $Params += @('--set', "language=enm")
                                 }
                             }
@@ -1770,9 +1830,9 @@ foreach ($folderPath in $targetFolders) {
                     }
                 }
                 [void]$fixDetails.Add(""); $fixDetails | Out-File $fixerLog -Append -Encoding utf8
-            } # <--- END FILES LOOP
-        } # <--- END GROUPS LOOP
-    } # <--- v2026.05.13_11.23.00 - END OF THE "ELSE" AUDITOR BYPASS
+            } # <--- END SEQUENTIAL FILES LOOP
+            Write-Host "" # Clear progress bar line
+        } # <--- v2026.05.13_11.23.00 - END OF THE "ELSE" AUDITOR BYPASS # <--- v2026.05.13_11.23.00 - END OF THE "ELSE" AUDITOR BYPASS
 
     
     
