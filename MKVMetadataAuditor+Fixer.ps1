@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: MKVMetadataAuditor+Fixer.ps1
-# VERSION: 2026.06.04__09.05.00
+# VERSION: 2026.06.04__10.17.00
 # TARGET: PowerShell 7.6.2 LTS
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -115,8 +115,12 @@ param (
     
 )
 
+# --- IMPLICIT SWITCH LOGIC ---
+if ($FixNoBackup) { $Fix = $true }
+if ($DeepSubtitleAuditDebugExtraction -or $DeepSubtitleAuditLanguageDetectionLimit2 -or $DeepSubtitleAuditNOLanguageDetection) { $DeepSubtitleAudit = $true }
+
 # --- GLOBAL VERSION DEFINITION ---
-$scriptVersion = "2026.06.04__09.05.00"
+$scriptVersion = "2026.06.04__10.17.00"
 
 # --- VERSION REPORTER ---
 if ($Version) {
@@ -967,17 +971,7 @@ foreach ($part in $PathParts) {
 }
 
 # --- DEPENDENCY CHECK ---
-if ($FixNoBackup -and -not $Fix) {
-    Write-Host "`n[ERROR] Modifier flag detected without -Fix." -ForegroundColor DarkRed
-    Write-Host "The -FixNoBackup flag requires the -Fix switch to be active.`n" -ForegroundColor DarkYellow
-    exit
-}
 
-if ($DeepSubtitleAuditDebugExtraction -and -not $DeepSubtitleAudit) {
-    Write-Host "`n[ERROR] Modifier flag detected without -DeepSubtitleAudit." -ForegroundColor DarkRed
-    Write-Host "The -DeepSubtitleAuditDebugExtraction flag requires the -DeepSubtitleAudit switch to be active.`n" -ForegroundColor DarkYellow
-    exit
-}
 
 # --- SEARCH FLAG RESTRICTION ---
 #       Modified for Global Debug 
@@ -1401,8 +1395,14 @@ if ($SubtitleFactorTrackOrder) {
         Write-Host "  Track Order:  " -NoNewline; Write-Host "Active (-SFTO)" -ForegroundColor Cyan
     }
 if ($DeepSubtitleAudit) {
-    $dsaDisp = "Active (-DSA)"
-    if ($DeepSubtitleAuditDebugExtraction) { $dsaDisp += " + Forced Extraction" }
+    $dsaDisp = "Active"
+    $dsaFlags = New-Object System.Collections.Generic.List[string]
+    if ($PSBoundParameters.ContainsKey('DeepSubtitleAudit')) { [void]$dsaFlags.Add("Full Pass") }
+    if ($DeepSubtitleAuditDebugExtraction) { [void]$dsaFlags.Add("Forced Extraction") }
+    if ($DeepSubtitleAuditLanguageDetectionLimit2) { [void]$dsaFlags.Add("2-Track Limit") }
+    if ($DeepSubtitleAuditNOLanguageDetection) { [void]$dsaFlags.Add("No Lng Detect") }
+    
+    if ($dsaFlags.Count -gt 0) { $dsaDisp += " ($($dsaFlags -join ' + '))" }
     Write-Host "  Deep Audit:   " -NoNewline; Write-Host "$dsaDisp" -ForegroundColor Cyan
 }
 if ($DevDebug) {
