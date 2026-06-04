@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: MKVMetadataAuditor+Fixer.ps1
-# VERSION: 2026.06.04__12.12.00
+# VERSION: 2026.06.04__01.03.00
 # TARGET: PowerShell 7.6.2 LTS
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -120,7 +120,7 @@ if ($FixNoBackup) { $Fix = $true }
 if ($DeepSubtitleAuditDebugExtraction -or $DeepSubtitleAuditLanguageDetectionLimit2 -or $DeepSubtitleAuditNOLanguageDetection) { $DeepSubtitleAudit = $true }
 
 # --- GLOBAL VERSION DEFINITION ---
-$scriptVersion = "2026.06.04__12.12.00"
+$scriptVersion = "2026.06.04__01.03.00"
 
 # --- VERSION REPORTER ---
 if ($Version) {
@@ -305,18 +305,24 @@ function Detect-SubtitleLanguage {
         if ($text -match "[đĐ]|[ấầẩẫậếềểễệốồổỗộắằẳẵặ]") { return "vie" }
         if ($text -match "[ąćęłńóśźżĄĆĘŁŃÓŚŹŻ]") { return "pol" }
         
-        # Turkish Detection with Font-Styling Protection (Stopword Validation)
+        # Turkish Protection (Stopwords + Character Frequency)
         if ([regex]::Matches($text, "[ıİğşĞŞ]").Count -gt 5) {
             if ($text -match "\b(?:bir|ve|bu|da|de|için|çok|o|ne)\b") { return "tur" }
         }
-        
+
+        # Dutch Protection (Digraph 'ij' + Stopwords)
+        # Dutch is unique for its high frequency of 'ij' digraphs inside words.
+        if ([regex]::Matches($text, "(?i)ij").Count -gt 5) {
+            if ($text -match "\b(?:het|niet|voor|maar|alleen|met|zou)\b") { return "dut" }
+        }
+
+        # Indonesian/Malay Protection (Unique Stopwords)
+        # 'yang' and 'dengan' are extremely high frequency and unique to this region.
+        if ($text -match "\b(?:yang|dengan|untuk|adalah|paling|sebagai)\b") { return "ind" }
+
         if ($text -match "[țșȚȘ]") { return "rum" }
         if ($text -match "[øæØÆ]") { return "dan" } # Danish/Norwegian
         
-        # Word-based checks for Indonesian/Malay and Dutch (Hard to detect via diacritics alone)
-        if ($text -match "\b(?:yang|dan|dengan|untuk|adalah|pada)\b") { return "ind" }
-        if ($text -match "\b(?:het|de|van|een|en|op)\b") { return "dut" }
-
         # Lower-Priority Multi-Match Markers
         if ($text -match "ß" -or ([regex]::Matches($text, "[äöüÄÖÜ]").Count -gt 15)) { 
             if ($text -match "\b(?:der|die|das|und|ist)\b") { return "ger" } # Verify German words vs Finnish/Swedish
@@ -2592,9 +2598,13 @@ foreach ($folderPath in $targetFolders) {
                     # Pull the DSA recommendation directly from the track object
                     $dsaDetected = ($fToFix.PristineJson.tracks | Where-Object { $_.id -eq $winner.ID }).DSA_DetectedLang
                     
-                    # [FIX] Check for SPECIFIC detected value 'enm' or name matches
+                    # [FIX] Truth-First: Use detected language if it differs from the header
                     $isWinnerHon = ($winner.Name -match $honRegex) -or ($winner.Lang -eq "enm") -or ($dsaDetected -eq "enm")
-                    $correctLangForWinner = if ($Honorifics -and $isWinnerHon) { "enm" } elseif ($winner.Lang -eq "enm") { "enm" } else { $targetSubLang }
+                    
+                    $correctLangForWinner = if ($dsaDetected -and $dsaDetected -ne "und") { $dsaDetected } 
+                                            elseif ($Honorifics -and $isWinnerHon) { "enm" } 
+                                            elseif ($winner.Lang -eq "enm") { "enm" } 
+                                            else { $targetSubLang }
                     
                     # [FIX] Determine Effective Language for Validity Check (DSA Detected vs Header)
                     $winnerEffLang = if ($dsaDetected) { $dsaDetected } else { $winner.Lang }
@@ -2653,9 +2663,11 @@ foreach ($folderPath in $targetFolders) {
                                 # Strip default and forced flags only
                                 $Params += @('--edit', "track:$loseID", '--set', "flag-default=0", '--set', "flag-forced=0")
                                 
-                                # [FIX] v2026.06.02 - Corrected property path for DSA metadata on non-winning tracks
-                                if ($Honorifics -and $lostTrack.DSA_DetectedLang -eq "enm" -and $lostTrack.properties.language -ne "enm") {
-                                    $Params += @('--set', "language=enm")
+                                # [FIX] Truth-First: Force update header if detected language doesn't match
+                                $detected = $lostTrack.DSA_DetectedLang
+                                if ($detected -and $detected -ne "und" -and $lostTrack.properties.language -ne $detected) {
+                                    $Params += @('--set', "language=$detected")
+                                    $needsChange = $true
                                 }
                             }
                         } # Closes foreach
