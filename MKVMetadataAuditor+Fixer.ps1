@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: MKVMetadataAuditor+Fixer.ps1
-# VERSION: 2026.06.04__05.33.54
+# VERSION: 2026.06.04__09.05.00
 # TARGET: PowerShell 7.6.2 LTS
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -116,7 +116,7 @@ param (
 )
 
 # --- GLOBAL VERSION DEFINITION ---
-$scriptVersion = "2026.06.04__05.33.54"
+$scriptVersion = "2026.06.04__09.05.00"
 
 # --- VERSION REPORTER ---
 if ($Version) {
@@ -552,7 +552,8 @@ function Get-TrackScore {
     # 4. Honorifics Scoring
     if ($Honorifics) {
         $honMatchRegex = "(?<!no\s|non-|without\s|removed\s|no-)(honorific|honor)"
-        if (($trackName -match $honMatchRegex) -or ($trackLang -eq "enm")) { 
+        $isHon = ($trackName -match $honMatchRegex) -or ($trackLang -eq "enm") -or ($t.DSA_DetectedLang -eq "enm")
+        if ($isHon) { 
             $score += 300 
             [void]$ruleLog.Add("Honorifics(+300)")
         }
@@ -2156,11 +2157,17 @@ foreach ($folderPath in $targetFolders) {
 
                                 # --- STAGE 2: PROBING PHASE (Weights and Language Detection) ---
                                 if ($dsaCtx.Weights.Count -eq 0) {
+                                    if ($DevDebug -and $DeepSubtitleAuditNOLanguageDetection) {
+                                        Write-Host "  [DevDebug-DSA] Language Detection: DISABLED via flag (-NLD)" -ForegroundColor DarkGray
+                                    }
                                     $isResolved = $false
                                     $targetRatio = 3.0
 
                                     # [Stage 2.1] FAST-PATH: Header Probe (Only valid for Dual-English pairs)
-                                    if ($ambiguousTracks.Count -eq 2 -and -not $DeepSubtitleAuditDebugExtraction) {
+                                    $isImgProbe = ($ambiguousTracks[0].codec -match "pgs|vobsub")
+                                    $skipHeaderForLngDetect = (-not $DeepSubtitleAuditNOLanguageDetection -and -not $isImgProbe)
+
+                                    if ($ambiguousTracks.Count -eq 2 -and -not $DeepSubtitleAuditDebugExtraction -and -not $skipHeaderForLngDetect) {
                                         if ($DevDebug) { Write-Host "  [DevDebug-DSA] Probing headers for statistical metadata..." -ForegroundColor Gray }
                                         
                                         $h1 = if ($ambiguousTracks[0].properties.tag_number_of_frames) { [int64]$ambiguousTracks[0].properties.tag_number_of_frames } 
@@ -2189,6 +2196,8 @@ foreach ($folderPath in $targetFolders) {
                                         } else {
                                             if ($DevDebug) { Write-Host "  [DevDebug-DSA] Header Probe Skip: Statistical tags (NUMBER_OF_FRAMES) missing from MKV header." -ForegroundColor DarkYellow }
                                         }
+                                    } elseif ($DevDebug -and $skipHeaderForLngDetect -and $ambiguousTracks.Count -eq 2) {
+                                        Write-Host "  [DevDebug-DSA] Header Probe Bypassed: Text extraction required for Language Detection (-NLD is not active)." -ForegroundColor DarkCyan
                                     }
 
                                     # [Stage 2.2] EXTRACTION-PATH: Deep Bitstream/Text Analysis
@@ -2273,6 +2282,59 @@ foreach ($folderPath in $targetFolders) {
                                         }
                                     }
                                 }
+                                
+                                # --- STAGE 3: DECISION LOGIC (SINGLE TRACK VALIDATION) ---
+                                if ($ambiguousTracks.Count -eq 1) {
+                                    $t1 = $ambiguousTracks[0]
+                                    $w1 = $dsaCtx.Weights[$t1.id]
+                                    $isText = $t1.codec -match "s_text|utf8|srt|ass|ssa|substationalpha|subrip"
+                                    
+                                    # Thresholds: Text (1500 chars) | Image (2.0 MB)
+                                    $minThreshold = if ($isText) { 1500 } else { 524288 }
+                                    $passedDensity = ($w1 -ge $minThreshold)
+                                    
+                                    $isHonDet = ($t1.DSA_DetectedLang -eq "enm" -or $t1.properties.language -eq "enm")
+                                    $currentName = if ($t1.properties.track_name) { $t1.properties.track_name } else { "" }
+                                    $actionMsg = ""
+
+                                    if ($DevDebug) {
+                                        $displayWeight = if ($isText) { $w1 } else { "$([Math]::Round($w1 / 1kb, 2)) KB" }
+                                        $displayLimit  = if ($isText) { $minThreshold } else { "$([Math]::Round($minThreshold / 1kb, 2)) KB" }
+                                        Write-Host "  [DevDebug-DSA] Single Track Analysis: ID:$($t1.id) | Weight: $displayWeight | Threshold: $displayLimit" -ForegroundColor Gray
+                                        Write-Host "  [DevDebug-DSA] Result: $(if ($passedDensity) { "Passed (Dialogue)" } else { "Failed (S&S/Low Density)" })" -ForegroundColor $(if ($passedDensity) { "Green" } else { "DarkYellow" })
+                                    }
+
+                                    if ($passedDensity) {
+                                        # DIALOGUE PASSED: Name and Language update
+                                        $newName = if ($currentName -match $script:RegexDiag) { $currentName } else { "Full Dialogue" }
+                                        if ($isHonDet -and $newName -notmatch "(?i)honorific|honor") {
+                                            $newName = ($newName.Trim() + " Honorifics").Trim()
+                                        }
+
+                                        if ($newName -ne $currentName) {
+                                            $needsChange = $true
+                                            if ($Fix) {
+                                                $Params += @('--edit', "track:$($t1.id + 1)", '--set', "name=$newName")
+                                                $t1.properties | Add-Member -NotePropertyName "track_name" -NotePropertyValue $newName -Force
+                                            }
+                                            $actionMsg = "[DSA] SINGLE-FIX: Validated Dialogue Track (Renamed: '$newName')"
+                                        } else {
+                                            $actionMsg = "[DSA] SINGLE-VERIFIED: Single Dialogue track name is correct."
+                                        }
+                                    } else {
+                                        # DENSITY FAILED: Update language only if needed, do NOT rename
+                                        $actionMsg = "[DSA] SINGLE-SKIP: Track failed density check (Likely Signs & Songs). Naming bypassed."
+                                    }
+
+                                    # Language check applies to both Pass/Fail if detection found enm
+                                    if ($isHonDet -and $t1.properties.language -ne "enm") {
+                                        $needsChange = $true # Trigger Fix to ensure language tag updates
+                                        $actionMsg += " + Lng Update (enm)"
+                                    }
+
+                                    if ($DevDebug) { Write-Host "  $($actionMsg -replace '^\[DSA\]', '[DevDebug-DSA]')" -ForegroundColor Cyan }
+                                    [void]$fixDetails.Add("  $actionMsg")
+                                }
 
                                 # --- STAGE 3: DECISION LOGIC (EXACTLY 2 TRACKS ONLY) ---
                                 if ($ambiguousTracks.Count -eq 2 -and $null -ne $currentGroup.PSObject.Properties[$fileGuid + "_Ratio"]) {
@@ -2302,13 +2364,17 @@ foreach ($folderPath in $targetFolders) {
                                             $hasDiagS = $nameS -match $script:RegexDiag
                                             $hasSignS = $nameS -match $script:RegexSign
                                             
+                                            # Check if name is missing "Honorific" despite detection
+                                            $isHonDet = ($largeTrack.DSA_DetectedLang -eq "enm" -or $largeTrack.properties.language -eq "enm")
+                                            $isNameMissingHon = ($isHonDet -and $nameL -notmatch "(?i)honorific|honor")
+                                            
                                             $actionMsg = ""
 
                                             # [Condition 3.1] SWAP REQUIRED
                                             if (($nameL -match $script:RegexSign) -and ($nameS -match $script:RegexDiag)) {
                                                 $needsChange = $true
-                                                $largeTrack.properties | Add-Member -NotePropertyName "DSA_Handled" -NotePropertyValue $true -Force
-                                                $smallTrack.properties | Add-Member -NotePropertyName "DSA_Handled" -NotePropertyValue $true -Force
+                                                $largeTrack.properties | Add-Member -MemberType NoteProperty -Name "DSA_Handled" -NotePropertyValue $true -Force
+                                                $smallTrack.properties | Add-Member -MemberType NoteProperty -Name "DSA_Handled" -NotePropertyValue $true -Force
                                                 if ($Fix) {
                                                     if ($nameS -ne $nameL) {
                                                         $Params += @('--edit', "track:$($largeTrack.id + 1)", '--set', "name=$nameS")
@@ -2319,14 +2385,20 @@ foreach ($folderPath in $targetFolders) {
                                                 }
                                                 $actionMsg = "[DSA] SWAP: Swapping '$nameS' to Large and '$nameL' to Small"
                                             }
-                                            # [Condition 3.2] FIX GARBAGE/MISSING
-                                            elseif (-not $hasDiagL -or -not $hasSignS -or ($nameL -match "English Subtitles")) {
+                                            # [Condition 3.2] FIX GARBAGE/MISSING/HONORIFICS
+                                            elseif (-not $hasDiagL -or -not $hasSignS -or ($nameL -match "English Subtitles") -or $isNameMissingHon) {
                                                 $needsChange = $true
                                                 $largeTrack.properties | Add-Member -NotePropertyName "DSA_Handled" -NotePropertyValue $true -Force
                                                 $smallTrack.properties | Add-Member -NotePropertyName "DSA_Handled" -NotePropertyValue $true -Force
                                                 
                                                 $newNameL = if ($hasDiagL) { $nameL } else { "Full Dialogue" }
                                                 $newNameS = if ($hasSignS) { $nameS } else { "Signs & Songs" }
+                                                
+                                                # Enhancement: Append Honorifics if detected via DSA or header
+                                                $isHonDetected = ($largeTrack.DSA_DetectedLang -eq "enm" -or $largeTrack.properties.language -eq "enm")
+                                                if ($isHonDetected -and $newNameL -notmatch "(?i)honorific|honor") {
+                                                    $newNameL = ($newNameL.Trim() + " Honorifics").Trim()
+                                                }
                                                 
                                                 if ($newNameL -eq $newNameS) { $newNameL = "Full Dialogue"; $newNameS = "Signs & Songs" }
 
@@ -2486,6 +2558,9 @@ foreach ($folderPath in $targetFolders) {
                     
                     # [FIX] Determine Effective Language for Validity Check (DSA Detected vs Header)
                     $winnerEffLang = if ($dsaDetected) { $dsaDetected } else { $winner.Lang }
+                    
+                    # Ensure Honorifics detection takes precedence over standard preferred language rules
+                    if ($Honorifics -and $winnerEffLang -eq "enm") { $correctLangForWinner = "enm" }
 
                     # PREFERRED OR NOTHING: Use Effective Language to authorize the Default flag
                     $isWinnerValidForDefault = ($winnerEffLang -eq $targetSubLang) -or ($winnerEffLang -eq "und") -or $isWinnerHon
