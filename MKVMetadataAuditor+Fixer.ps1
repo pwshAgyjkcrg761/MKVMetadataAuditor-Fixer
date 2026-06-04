@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: MKVMetadataAuditor+Fixer.ps1
-# VERSION: 2026.06.04__10.17.00
+# VERSION: 2026.06.04__11.15.00
 # TARGET: PowerShell 7.6.2 LTS
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -120,7 +120,7 @@ if ($FixNoBackup) { $Fix = $true }
 if ($DeepSubtitleAuditDebugExtraction -or $DeepSubtitleAuditLanguageDetectionLimit2 -or $DeepSubtitleAuditNOLanguageDetection) { $DeepSubtitleAudit = $true }
 
 # --- GLOBAL VERSION DEFINITION ---
-$scriptVersion = "2026.06.04__10.17.00"
+$scriptVersion = "2026.06.04__11.15.00"
 
 # --- VERSION REPORTER ---
 if ($Version) {
@@ -275,30 +275,54 @@ function Detect-SubtitleLanguage {
     if ([string]::IsNullOrWhiteSpace($text)) { return "und" }
     $total = $text.Length
     
-    # 1. Non-Latin Script Detection
-    $arabic   = [regex]::Matches($text, "[\u0600-\u06FF]").Count
-    $cyrillic = [regex]::Matches($text, "[\u0400-\u04FF]").Count
-    $hangul   = [regex]::Matches($text, "[\uAC00-\uD7AF]").Count
-    $kana     = [regex]::Matches($text, "[\u3040-\u309F\u30A0-\u30FF]").Count
-    $han      = [regex]::Matches($text, "[\u4E00-\u9FFF]").Count
-    $thai     = [regex]::Matches($text, "[\u0E00-\u0E7F]").Count
+    # 1. Non-Latin Unique Scripts
+    if ([regex]::Matches($text, "[\u0E00-\u0E7F]").Count / $total -gt 0.15) { return "tha" } # Thai
+    if ([regex]::Matches($text, "[\uAC00-\uD7AF]").Count / $total -gt 0.15) { return "kor" } # Hangul
+    if ([regex]::Matches($text, "[\u3040-\u309F\u30A0-\u30FF]").Count / $total -gt 0.05) { return "jpn" } # Kana
+    if ([regex]::Matches($text, "[\u4E00-\u9FFF]").Count / $total -gt 0.15) { return "chi" } # Han
+    if ([regex]::Matches($text, "[\u0370-\u03FF]").Count / $total -gt 0.15) { return "gre" } # Greek
+    if ([regex]::Matches($text, "[\u0590-\u05FF]").Count / $total -gt 0.15) { return "heb" } # Hebrew
+    if ([regex]::Matches($text, "[\u0900-\u097F]").Count / $total -gt 0.15) { return "hin" } # Hindi (Devanagari)
+
+    # 2. Cyrillic Differentiation (Russian vs Ukrainian)
+    $cyrCount = [regex]::Matches($text, "[\u0400-\u04FF]").Count
+    if ($cyrCount / $total -gt 0.15) {
+        if ($text -match "[ґєіїҐЄІЇ]") { return "ukr" }
+        return "rus"
+    }
+
+    # 3. Arabic Script Differentiation (Arabic vs Persian/Farsi)
+    $araCount = [regex]::Matches($text, "[\u0600-\u06FF]").Count
+    if ($araCount / $total -gt 0.15) {
+        if ($text -match "[پچژگ]") { return "per" }
+        return "ara"
+    }
     
-    if ($arabic / $total -gt 0.15)   { return "ara" }
-    if ($cyrillic / $total -gt 0.15) { return "rus" }
-    if ($hangul / $total -gt 0.15)   { return "kor" }
-    if ($kana / $total -gt 0.05)     { return "jpn" }
-    if ($han / $total -gt 0.15)      { return "chi" }
-    if ($thai / $total -gt 0.15)     { return "tha" }
-    
-    # 2. Latin-Based Language Detection
+    # 4. Latin-Based Language Detection
     $latin = [regex]::Matches($text, "[\u0000-\u007F\u0080-\u00FF\u0100-\u017F\u1E00-\u1EFF]").Count
     if ($latin / $total -gt 0.5) {
+        # High-Priority Markers (Unique characters)
         if ($text -match "[đĐ]|[ấầẩẫậếềểễệốồổỗộắằẳẵặ]") { return "vie" }
-        if ($text -match "ß" -or ([regex]::Matches($text, "[äöüÄÖÜ]").Count -gt 15)) { return "ger" }
+        if ($text -match "[ąćęłńóśźżĄĆĘŁŃÓŚŹŻ]") { return "pol" }
+        if ($text -match "[ıİğş]") { return "tur" }
+        if ($text -match "[țșȚȘ]") { return "rum" }
+        if ($text -match "[øæØÆ]") { return "dan" } # Danish/Norwegian
+        
+        # Word-based checks for Indonesian/Malay and Dutch (Hard to detect via diacritics alone)
+        if ($text -match "\b(?:yang|dan|dengan|untuk|adalah|pada)\b") { return "ind" }
+        if ($text -match "\b(?:het|de|van|een|en|op)\b") { return "dut" }
+
+        # Lower-Priority Multi-Match Markers
+        if ($text -match "ß" -or ([regex]::Matches($text, "[äöüÄÖÜ]").Count -gt 15)) { 
+            if ($text -match "\b(?:der|die|das|und|ist)\b") { return "ger" } # Verify German words vs Finnish/Swedish
+            if ($text -match "[åÅ]") { return "swe" } # Swedish
+        }
         if ($text -match "[ñÑ¿¡]") { return "spa" }
         if ($text -match "[ãÃõÕ]") { return "por" }
         if ($text -match "[œŒ]" -or ([regex]::Matches($text, "[çÇêëâîû]").Count -gt 15)) { return "fre" }
         if ($text -match "[ìÌòÒùÙ]") { return "ita" }
+        
+        # English and Honorifics
         if ($Honorifics -and ([regex]::Matches($text, "-(?:san|kun|chan|sama|dono|senpai|kohai|sensei)\b").Count -ge 5)) { return "enm" }
         return "eng"
     }
@@ -1267,7 +1291,8 @@ $codecMap = @{
 # Shared across Auditor, Fixer scoring, and DSA logic
 $script:RegexDiag = "Dialog|Full|Japanese Audio|Main"
 # Streamlined Sign logic: Opening/Ending/OP/ED added.
-$script:RegexSign = "Sign|Song|Lyric|Opening|Ending|OP|ED|Partial|Forced|Translation|ASSR|S&S|S\s&\sS|Dubtitle"
+# Added word boundaries (\b) to OP and ED to prevent matching strings like "Modified" or "Styled".
+$script:RegexSign = "Sign|Song|Lyric|Opening|Ending|\bOP\b|\bED\b|Partial|Forced|Translation|ASSR|S&S|S\s&\sS|Dubtitle"
 
 # 2. APPLY OVERRIDES FROM COMMAND LINE
 # Ensure the Video object exists in the defaults
