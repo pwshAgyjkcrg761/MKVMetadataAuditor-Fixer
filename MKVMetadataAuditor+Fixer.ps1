@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: MKVMetadataAuditor+Fixer.ps1
-# VERSION: 2026.06.04__01.03.00
+# VERSION: 2026.06.04__02.12.00
 # TARGET: PowerShell 7.6.2 LTS
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -120,7 +120,7 @@ if ($FixNoBackup) { $Fix = $true }
 if ($DeepSubtitleAuditDebugExtraction -or $DeepSubtitleAuditLanguageDetectionLimit2 -or $DeepSubtitleAuditNOLanguageDetection) { $DeepSubtitleAudit = $true }
 
 # --- GLOBAL VERSION DEFINITION ---
-$scriptVersion = "2026.06.04__01.03.00"
+$scriptVersion = "2026.06.04__02.12.00"
 
 # --- VERSION REPORTER ---
 if ($Version) {
@@ -310,10 +310,16 @@ function Detect-SubtitleLanguage {
             if ($text -match "\b(?:bir|ve|bu|da|de|için|çok|o|ne)\b") { return "tur" }
         }
 
-        # Dutch Protection (Digraph 'ij' + Stopwords)
-        # Dutch is unique for its high frequency of 'ij' digraphs inside words.
-        if ([regex]::Matches($text, "(?i)ij").Count -gt 5) {
-            if ($text -match "\b(?:het|niet|voor|maar|alleen|met|zou)\b") { return "dut" }
+        # Dutch Protection (The "De/Het/Een" Rule)
+        # Dutch articles 'de', 'het', and 'een' are extremely high frequency.
+        # We also check for 'ik' (I) and 'niet' (not) while avoiding Japanese overlaps.
+        $dutchStopwords = "\b(?:de|het|een|niet|van|ik|zijn|dat|voor|hebben|ook)\b"
+        $dutchMatches = [regex]::Matches($text, $dutchStopwords).Count
+        if ($dutchMatches -gt 15 -and ($text -match "\b(?:de|het|een)\b")) {
+            # Only confirm Dutch if the core articles are present alongside 'ij' or 'ik'
+            if ([regex]::Matches($text, "(?i)ij").Count -gt 5 -or ($text -match "\bik\b")) {
+                return "dut"
+            }
         }
 
         # Indonesian/Malay Protection (Unique Stopwords)
@@ -2352,10 +2358,14 @@ foreach ($folderPath in $targetFolders) {
 
                                     if ($passedDensity) {
                                         # DIALOGUE PASSED: Name and Language update
-                                        $newName = if ($currentName -match $script:RegexDiag) { $currentName } else { "Full Dialogue" }
-                                        if ($isHonDet -and $newName -notmatch "(?i)honorific|honor") {
-                                            $newName = ($newName.Trim() + " Honorifics").Trim()
-                                        }
+                                        # Smart Sanitization: Strip generic words to find the group name
+                                        $genericFilter = "(?i)\b(eng(lish)?|subs?(titles)?|full|dialog(ue)?|main|signs?|songs?|lyrics?|translated|translation)\b|[\[\]\(\)\-\.\:]"
+                                        $groupName = ($currentName -replace $genericFilter, ' ').Trim() -replace '\s+', ' '
+                                        
+                                        $role = "Full Dialogue"
+                                        if ($isHonDet) { $role += " Honorifics" }
+                                        
+                                        $newName = if ([string]::IsNullOrWhiteSpace($groupName)) { $role } else { "$role [$groupName]" }
 
                                         if ($newName -ne $currentName) {
                                             $needsChange = $true
@@ -2437,14 +2447,18 @@ foreach ($folderPath in $targetFolders) {
                                                 $largeTrack.properties | Add-Member -NotePropertyName "DSA_Handled" -NotePropertyValue $true -Force
                                                 $smallTrack.properties | Add-Member -NotePropertyName "DSA_Handled" -NotePropertyValue $true -Force
                                                 
-                                                $newNameL = if ($hasDiagL) { $nameL } else { "Full Dialogue" }
-                                                $newNameS = if ($hasSignS) { $nameS } else { "Signs & Songs" }
+                                                # Smart Sanitization Logic
+                                                $genericFilter = "(?i)\b(eng(lish)?|subs?(titles)?|full|dialog(ue)?|main|signs?|songs?|lyrics?|translated|translation)\b|[\[\]\(\)\-\.\:]"
                                                 
-                                                # Enhancement: Append Honorifics if detected via DSA or header
-                                                $isHonDetected = ($largeTrack.DSA_DetectedLang -eq "enm" -or $largeTrack.properties.language -eq "enm")
-                                                if ($isHonDetected -and $newNameL -notmatch "(?i)honorific|honor") {
-                                                    $newNameL = ($newNameL.Trim() + " Honorifics").Trim()
-                                                }
+                                                # Process Large Track (Dialogue)
+                                                $groupL = ($nameL -replace $genericFilter, ' ').Trim() -replace '\s+', ' '
+                                                $roleL = "Full Dialogue"
+                                                if ($largeTrack.DSA_DetectedLang -eq "enm" -or $largeTrack.properties.language -eq "enm") { $roleL += " Honorifics" }
+                                                $newNameL = if ([string]::IsNullOrWhiteSpace($groupL)) { $roleL } else { "$roleL [$groupL]" }
+
+                                                # Process Small Track (Signs)
+                                                $groupS = ($nameS -replace $genericFilter, ' ').Trim() -replace '\s+', ' '
+                                                $newNameS = if ([string]::IsNullOrWhiteSpace($groupS)) { "Signs & Songs" } else { "Signs & Songs [$groupS]" }
                                                 
                                                 if ($newNameL -eq $newNameS) { $newNameL = "Full Dialogue"; $newNameS = "Signs & Songs" }
 
