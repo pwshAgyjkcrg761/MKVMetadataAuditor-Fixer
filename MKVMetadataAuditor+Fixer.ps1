@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: MKVMetadataAuditor+Fixer.ps1
-# VERSION: 2026.06.03__19.04.00
+# VERSION: 2026.06.04__05.33.54
 # TARGET: PowerShell 7.6.2 LTS
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -116,7 +116,7 @@ param (
 )
 
 # --- GLOBAL VERSION DEFINITION ---
-$scriptVersion = "2026.06.03__19.04.00"
+$scriptVersion = "2026.06.04__05.33.54"
 
 # --- VERSION REPORTER ---
 if ($Version) {
@@ -295,7 +295,7 @@ function Detect-SubtitleLanguage {
         if ($text -match "[ãÃõÕ]") { return "por" }
         if ($text -match "[œŒ]" -or ([regex]::Matches($text, "[çÇêëâîû]").Count -gt 15)) { return "fre" }
         if ($text -match "[ìÌòÒùÙ]") { return "ita" }
-        if ($Honorifics -and ($text -match "-(?:san|kun|chan|sama|dono|senpai|kohai|sensei)\b")) { return "enm" }
+        if ($Honorifics -and ([regex]::Matches($text, "-(?:san|kun|chan|sama|dono|senpai|kohai|sensei)\b").Count -ge 5)) { return "enm" }
         return "eng"
     }
     return "und"
