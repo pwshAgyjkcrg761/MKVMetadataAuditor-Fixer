@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: MKVMetadataAuditor+Fixer.ps1
-# VERSION: 2026.06.04__11.15.00
+# VERSION: 2026.06.04__12.12.00
 # TARGET: PowerShell 7.6.2 LTS
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -120,7 +120,7 @@ if ($FixNoBackup) { $Fix = $true }
 if ($DeepSubtitleAuditDebugExtraction -or $DeepSubtitleAuditLanguageDetectionLimit2 -or $DeepSubtitleAuditNOLanguageDetection) { $DeepSubtitleAudit = $true }
 
 # --- GLOBAL VERSION DEFINITION ---
-$scriptVersion = "2026.06.04__11.15.00"
+$scriptVersion = "2026.06.04__12.12.00"
 
 # --- VERSION REPORTER ---
 if ($Version) {
@@ -304,7 +304,12 @@ function Detect-SubtitleLanguage {
         # High-Priority Markers (Unique characters)
         if ($text -match "[đĐ]|[ấầẩẫậếềểễệốồổỗộắằẳẵặ]") { return "vie" }
         if ($text -match "[ąćęłńóśźżĄĆĘŁŃÓŚŹŻ]") { return "pol" }
-        if ($text -match "[ıİğş]") { return "tur" }
+        
+        # Turkish Detection with Font-Styling Protection (Stopword Validation)
+        if ([regex]::Matches($text, "[ıİğşĞŞ]").Count -gt 5) {
+            if ($text -match "\b(?:bir|ve|bu|da|de|için|çok|o|ne)\b") { return "tur" }
+        }
+        
         if ($text -match "[țșȚȘ]") { return "rum" }
         if ($text -match "[øæØÆ]") { return "dan" } # Danish/Norwegian
         
@@ -2234,13 +2239,23 @@ foreach ($folderPath in $targetFolders) {
                                         $extractArgs = New-Object System.Collections.Generic.List[string]
                                         $probeMap = @{}
                                         foreach ($sub in $ambiguousTracks) {
+                                            
+                                            $isImageSub = ($sub.codec -match "PGS|VobSub")
+                                            
+                                            # OPTIMIZATION: Skip extraction of picture subs if there are 3+ tracks.
+                                            # Density/Ratio checks only apply to 1 or 2 track scenarios.
+                                            if ($isImageSub -and $ambiguousTracks.Count -gt 2) {
+                                                if ($DevDebug) { Write-Host "  [DevDebug-DSA] Skip Extraction: ID:$($sub.id) is Picture Sub and file has >2 tracks." -ForegroundColor DarkGray }
+                                                continue
+                                            }
+                                            
                                             $ext = Get-SubtitleExtension -Codec $sub.codec
                                             $tmpPath = Join-Path $tempDir "track$($sub.id).$ext"
                                             $extractArgs.Add("$($sub.id):$tmpPath")
                                             $probeMap[$sub.id] = $tmpPath
                                         }
                                         
-                                        if ($DevDebug) { Write-Host "  [DevDebug-DSA] Extracting $($ambiguousTracks.Count) tracks for analysis..." -ForegroundColor DarkCyan }
+                                        if ($DevDebug) { Write-Host "  [DevDebug-DSA] Extracting $($extractArgs.Count) tracks for analysis..." -ForegroundColor DarkCyan }
                                         & $mkvextract "$($fToFix.FullName)" tracks @extractArgs | Out-Null
                                         
                                         foreach ($sub in $ambiguousTracks) {
