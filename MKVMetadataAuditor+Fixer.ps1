@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: MKVMetadataAuditor+Fixer.ps1
-# VERSION: 2026.06.05__13.23.00
+# VERSION: 2026.06.05__15.58.00
 # TARGET: PowerShell 7.6.2 LTS
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -125,7 +125,7 @@ if ($FixNoBackup) { $Fix = $true }
 if ($DeepSubtitleAuditDebugExtraction -or $DeepSubtitleAuditLanguageDetectionLimit2 -or $DeepSubtitleAuditNOLanguageDetection) { $DeepSubtitleAudit = $true }
 
 # --- GLOBAL VERSION DEFINITION ---
-$scriptVersion = "2026.06.05__13.23.00"
+$scriptVersion = "2026.06.05__15.58.00"
 
 # --- VERSION REPORTER ---
 if ($Version) {
@@ -280,10 +280,52 @@ function Test-IsHigh10 {
         [string]$FilePath,
         [string]$MediaInfoPath
     )
-    if (-not (Test-Path -LiteralPath $MediaInfoPath)) { return $false }
+    if (-not (Test-Path -LiteralPath $MediaInfoPath)) { return [PSCustomObject]@{ IsHigh10 = $false; IsReadable = $false; Error = "MediaInfo Missing" } }
     
-    $profile = (& $MediaInfoPath --Inform="Video;%Format_Profile%" "$FilePath").ToString().Trim()
-    return $profile -match "High.*10"
+    # 1. Validation: Check if the file is accessible and if MediaInfo can see its format
+    if (-not (Test-Path -LiteralPath $FilePath)) {
+        return [PSCustomObject]@{ IsHigh10 = $false; IsReadable = $false; Error = "File Not Found" }
+    }
+
+    $genFormat = ""
+    try {
+        # Get multiple fields at once to minimize CLI overhead and verify file structure
+        $raw = & $MediaInfoPath --Inform="General;%Format%|%VideoCount%|%FileExtension%" "$FilePath"
+        if ($raw -is [array]) { $raw = $raw[0] }
+        $parts = "$raw".Split('|')
+        
+        $genFormat = if ($parts.Count -gt 0) { $parts[0].Trim() } else { "" }
+        $vCount    = if ($parts.Count -gt 1) { $parts[1].Trim() } else { "0" }
+        $extension = if ($parts.Count -gt 2) { $parts[2].Trim() } else { "" }
+
+        # If MediaInfo cannot determine the container format (genFormat), the file is invalid/corrupted
+        # regardless of whether it has a file extension.
+        if ([string]::IsNullOrWhiteSpace($genFormat)) {
+             return [PSCustomObject]@{ IsHigh10 = $false; IsReadable = $false; Error = "Unreadable Header/Corrupted" }
+        }
+
+        # 2. Track Check: Skip profile checks if no video is present (e.g., audio-only files)
+        if ($vCount -eq "0" -or [string]::IsNullOrWhiteSpace($vCount)) {
+            return [PSCustomObject]@{ IsHigh10 = $false; IsReadable = $true; Format = "NoVideo"; Profile = "N/A" }
+        }
+
+        # 3. Extraction: Get the specific profile and codec format
+        $profileRaw = & $MediaInfoPath --Inform="Video;%Format%|%Format_Profile%" "$FilePath"
+        if ($profileRaw -is [array]) { $profileRaw = $profileRaw[0] }
+        $vParts = "$profileRaw".Split('|')
+        
+        $vFormat = if ($vParts.Count -gt 0) { $vParts[0].Trim() } else { "" }
+        $profile = if ($vParts.Count -gt 1) { $vParts[1].Trim() } else { "" }
+
+        return [PSCustomObject]@{ 
+            IsHigh10   = ($profile -match "High.*10")
+            IsReadable = $true
+            Format     = $vFormat
+            Profile    = $profile
+        }
+    } catch {
+        return [PSCustomObject]@{ IsHigh10 = $false; IsReadable = $false; Error = "CLI Execution Error" }
+    }
 }
 
 function Get-H10PLogHeader {
@@ -427,25 +469,7 @@ function Extract-DialogueText {
     return $finalText
 }
 
-# [FROM: MKVMetadataAuditor+Fixer.SearchH10P.ps1]
-function Test-IsHigh10 {
-    param([string]$FilePath, [string]$MediaInfoPath)
-    if (-not (Test-Path -LiteralPath $MediaInfoPath)) { return $false }
-    $profile = (& $MediaInfoPath --Inform="Video;%Format_Profile%" "$FilePath").ToString().Trim()
-    return $profile -match "High.*10"
-}
 
-function Get-H10PLogHeader {
-    param([switch]$Fast)
-    $ts = Get-Date -Format "yyyy-MM-dd HH:mm"
-    $lines = New-Object System.Collections.Generic.List[string]
-    $lines.Add("----------------------------------------------")
-    $lines.Add($ts)
-    if ($Fast) { $lines.Add("Fast Scan - First File in Each Folder Only") }
-    $lines.Add("AVC High 10 Profile Found")
-    $lines.Add("----------------------------------------------")
-    return $lines
-}
 
 # [FROM: MKVMetadataAuditor+Fixer.Auditor.ps1]
 $global:trackCounters = @{ "video" = 1; "audio" = 1; "subtitles" = 1 }
@@ -1247,6 +1271,7 @@ New-Item -Path $script:GlobalTemp -ItemType Directory | Out-Null
 
 $h10pList = New-Object System.Collections.Generic.List[string]
 $h10pCount = 0
+$corruptCount = 0
 
 # --- EXCLUSION INITIALIZATION ---
 $excludeFile = Join-Path $PSScriptRoot "MKVMetadataAuditor+Fixer__Excluded-Paths.txt"
@@ -1672,7 +1697,15 @@ $fastHeaderWritten = $false
 $logBuffer = New-Object System.Collections.Generic.List[string]
 $lastFlushTime = [DateTime]::Now
 
-$videoExtensions = @("*.mkv", "*.mp4", "*.m4v", "*.avi", "*.wmv", "*.flv", "*.mov", "*.ts", "*.m2ts", "*.ogm")
+$videoExtensions = @(
+    "*.mkv", "*.mp4", "*.m4v", "*.avi", "*.wmv", 
+    "*.flv", "*.mov", "*.ts", "*.m2ts", "*.ogm",
+    "*.webm", "*.mts", "*.tp", "*.trp", "*.h264", 
+    "*.264", "*.avc", "*.3gp", "*.3g2", "*.mpeg", 
+    "*.mpg", "*.divx", "*.xvid", "*.rm", "*.rmvb",
+    "*.f4v", "*.qt", "*.m4b", "*.m4r", "*.mxf", 
+    "*.vob"
+)
 $searchFilter = if ($AvcHigh10Search) { $videoExtensions } else { "*.mkv" }
 
 $Host.PrivateData.ProgressForegroundColor = "Cyan"
@@ -1748,7 +1781,9 @@ foreach ($folderPath in $targetFolders) {
         continue
     }
     
-    Write-Host "Checking: $($folderPath.FullName)..." -ForegroundColor Gray # <--- LIVE FEEDBACK
+    if (-not $AvcHigh10Search -or $DevDebug) {
+        Write-Host "Checking: $($folderPath.FullName)..." -ForegroundColor Gray # <--- LIVE FEEDBACK
+    }
     $global:GroupMap = @{}
     $global:Counter = 1
     $folder = Get-Item -LiteralPath $folderPath.FullName
@@ -1809,7 +1844,26 @@ foreach ($folderPath in $targetFolders) {
                 Write-Host "`n [DevDebug-H10P] File Path: $($f.FullName)" -ForegroundColor Gray
                 Write-Host " [DevDebug-H10P] File Name: $($f.Name)" -ForegroundColor DarkGray
             }
-            if (Test-IsHigh10 -FilePath $f.FullName -MediaInfoPath $mediainfo) {
+            $status = Test-IsHigh10 -FilePath $f.FullName -MediaInfoPath $mediainfo
+            
+            if ($DevDebug) {
+                if (-not $status.IsReadable) { 
+                    Write-Host " [DevDebug-H10P] Status: ERROR | $($status.Error)" -ForegroundColor Red 
+                } else {
+                    Write-Host " [DevDebug-H10P] Status: $($status.Format) | $($status.Profile)" -ForegroundColor Gray
+                }
+            }
+
+            if (-not $status.IsReadable) {
+                # Log Unreadable Files
+                $corruptCount++
+                $h10pList.Add("[ERROR] UNREADABLE: $($f.FullName) - Reason: $($status.Error)")
+                Write-Host "`n"
+                Write-Host "  [!] CORRUPT/UNREADABLE FILE FOUND:" -ForegroundColor DarkRed
+                Write-Host "      Name: $($f.Name)" -ForegroundColor DarkYellow
+                Write-Host "      Path: $($f.FullName)" -ForegroundColor Gray
+            }
+            elseif ($status.IsHigh10) {
                 $h10pCount++
                 
                 # Logic: If Fast mode and no FullPath requested, log the Folder Path for the exclusion list.
@@ -1829,7 +1883,7 @@ foreach ($folderPath in $targetFolders) {
             if ($fast) {
                 # Add content to buffer for Fast Mode
                 if (-not $fastHeaderWritten) {
-                    $logBuffer.AddRange((Get-H10PLogHeader -Fast))
+                    foreach ($hLine in (Get-H10PLogHeader -Fast)) { $logBuffer.Add($hLine) }
                     $fastHeaderWritten = $true
                 }
                 foreach ($line in $h10pList) { $logBuffer.Add($line) }
@@ -2907,11 +2961,12 @@ if ($logBuffer.Count -gt 0) {
 
 
 # --- FINAL GLOBAL SUMMARY ---
-if ($h10pCount -gt 0) {
+if ($h10pCount -gt 0 -or $corruptCount -gt 0) {
     Write-Host ""
     Write-Host "==================================================" -ForegroundColor DarkYellow
-    Write-Host " AVC HIGH 10 PROFILE SUMMARY" -ForegroundColor DarkYellow
-    Write-Host " Total Files Found: $h10pCount" -ForegroundColor Gray
+    Write-Host " AVC HIGH 10 PROFILE SEARCH SUMMARY" -ForegroundColor DarkYellow
+    Write-Host " Total High 10 Found: $h10pCount" -ForegroundColor Gray
+    Write-Host " Total Corrupt Found: $corruptCount" -ForegroundColor $(if ($corruptCount -gt 0) { "Red" } else { "Gray" })
     Write-Host " Log: $h10pLog" -ForegroundColor Gray
     Write-Host "==================================================" -ForegroundColor DarkYellow
 }
@@ -2920,10 +2975,10 @@ Write-Host "Complete." -ForegroundColor DarkCyan
 
 # --- GLOBAL SESSION CLEANUP ---
 if (Test-Path $script:GlobalTemp) {
-    if ($DevDebug) {
+if ($DevDebug -and $DeepSubtitleAudit) {
         Write-Host " [DevDebug-Main] Temp files preserved at: $script:GlobalTemp" -ForegroundColor DarkGray
     } else {
-        # Standard Mode: Wipe the entire root temp folder on exit
+        # Standard Mode or DevDebug without DSA: Wipe the root temp folder on exit
         Remove-Item -LiteralPath $script:GlobalTemp -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
