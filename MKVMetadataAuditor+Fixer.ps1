@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: MKVMetadataAuditor+Fixer.ps1
-# VERSION: 2026.06.04__20.23.00
+# VERSION: 2026.06.05__11.26.06
 # TARGET: PowerShell 7.6.2 LTS
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -20,13 +20,18 @@
 #    - STAMP ACCURACY: Ensure the minutes match the current Chicago clock exactly.
 # 2. DO NOT modify or refactor any code inside <PROTECTED> tags.
 # 3. SCRIPT OUTPUT:
-#    - When printing the script only print snippets unless asked for entire script.
+#    - When printing the script, only print snippets unless asked for the entire script.
 #    - Always use a codebox with a copy button.
+#    - If there are multiple modifications, present them strictly ONE step at a time,
+#      and wait for user confirmation before proceeding to the next step.
 # 4. VERBATIM ANCHOR PROTOCOL:
-#    - To facilitate "Find" in Notepad++, always provide "Verbatim Anchors."
-#    - "Verbatim Anchors" are the exact lines of existing code immediately BEFORE and AFTER the insertion point.
+#    - To facilitate "Find" in Notepad++ always structure edits with:
+#      - "Verbatim Anchor (Before)" - The exact lines of existing code immediately before the change.
+#      - "Verbatim Anchor (After)" - The exact lines of existing code immediately after the change.
+#      - "Snippet to REPLACE" - The exact code block to be deleted.
+#      - "What to PASTE in its place" - The new code block to be inserted.
 #    - Do not summarize, truncate, or refactor the existing code used as an anchor.
-#    - Copy the existing spaces, comments, and symbols exactly as they appear in the file.
+#    - Copy spaces, comments, and symbols exactly as they appear in the file.
 # ==============================================================================
 # </PROTECTED>
 
@@ -120,7 +125,7 @@ if ($FixNoBackup) { $Fix = $true }
 if ($DeepSubtitleAuditDebugExtraction -or $DeepSubtitleAuditLanguageDetectionLimit2 -or $DeepSubtitleAuditNOLanguageDetection) { $DeepSubtitleAudit = $true }
 
 # --- GLOBAL VERSION DEFINITION ---
-$scriptVersion = "2026.06.04__20.23.00"
+$scriptVersion = "2026.06.05__11.26.06"
 
 # --- VERSION REPORTER ---
 if ($Version) {
@@ -221,6 +226,14 @@ function Get-TargetFolders {
 
     foreach ($path in $InputPaths) {
         try {
+            
+            # Resolve directly if the path is a file
+            if ([System.IO.File]::Exists($path)) {
+                $fi = [System.IO.FileInfo]::new($path)
+                if ($seenPaths.Add($fi.FullName)) { [void]$resolvedFolders.Add($fi) }
+                continue
+            }
+
             # Use .NET Direct API to bypass PowerShell provider limitations with characters like '!' and '['
             $di = [System.IO.DirectoryInfo]::new($path)
             if (-not $di.Exists) { continue }
@@ -552,10 +565,20 @@ function Get-TrackProps {
 # [FROM: MKVMetadataAuditor+Fixer.Fixer.ps1]
 function Invoke-MkvBackup {
     param([string]$FilePath, [string]$RootPath)
+    
+    # Check if the original RootPath is a file
+    $isFile = [System.IO.File]::Exists($RootPath)
+    $resolvedRoot = if ($isFile) { Split-Path $RootPath -Parent } else { $RootPath }
+    
     $fileItem = Get-Item -LiteralPath $FilePath
-    $parentDir = Split-Path $RootPath -Parent
-    $rootName = Split-Path $RootPath -Leaf
-    $backupRootPath = Join-Path $parentDir "$($rootName)_updated"
+
+    if ($isFile) {
+        $backupRootPath = Join-Path $resolvedRoot "_updated"
+    } else {
+        $parentDir = Split-Path $resolvedRoot -Parent
+        $rootName = Split-Path $resolvedRoot -Leaf
+        $backupRootPath = Join-Path $parentDir "$($rootName)_updated"
+    }
     $relativeDir = ""
     $parentPath = Split-Path $FilePath -Parent
     if ($FilePath.StartsWith($RootPath) -and $parentPath.Length -gt $RootPath.Length) {
@@ -1517,7 +1540,11 @@ if ($Fix) {
         Write-Host "`r  -> SOURCE WILL BE OVERWRITTEN" -ForegroundColor DarkRed
     } else {
         foreach ($p in $inputPaths) { 
-            $destPath = $p.TrimEnd('\') + "_updated"
+            $destPath = if ([System.IO.File]::Exists($p)) {
+                Join-Path (Split-Path $p -Parent) "_updated"
+            } else {
+                $p.TrimEnd('\') + "_updated"
+            }
             Write-Host "  -> $destPath" -ForegroundColor Blue
             
             # Warn if the updated directory already exists
@@ -1537,7 +1564,11 @@ if ($VerifyUpdates) {
     Write-Host "Verification Mode:" -ForegroundColor Green
     if ($Fix -and -not $FixNoBackup) {
         foreach ($p in $inputPaths) {
-            $verifyDest = $p.TrimEnd('\') + "_updated"
+            $verifyDest = if ([System.IO.File]::Exists($p)) {
+                Join-Path (Split-Path $p -Parent) "_updated"
+            } else {
+                $p.TrimEnd('\') + "_updated"
+            }
             Write-Host "  -> Post-Fix Audit Target: $verifyDest" -ForegroundColor Cyan
         }
     } else {
@@ -1666,10 +1697,18 @@ if ($fast) {
         
         if ($DevDebug) { Write-Host " [DevDebug-Scanner] Scanning Folder: $($folder.FullName)" -ForegroundColor DarkGray }
 
-        # Use Filter with -Force to ensure all valid MKVs are counted regardless of attributes
-        $found = Get-ChildItem -LiteralPath $folder.FullName -Filter "*.mkv" -File -Force -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName
-        if ($found) { $found | ForEach-Object { $sessionFileList.Add([string]$_) } }
+        # Differentiate between FileInfo and DirectoryInfo containers
+        if ($folder -is [System.IO.DirectoryInfo]) {
+            $found = Get-ChildItem -LiteralPath $folder.FullName -Filter "*.mkv" -File -Force -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName
+            if ($found) { $found | ForEach-Object { $sessionFileList.Add([string]$_) } }
+        } else {
+            if ($folder.FullName -like "*.mkv") {
+                $sessionFileList.Add($folder.FullName)
+            }
+        }
     }
+    
+    
     $totalSessionItems = ($sessionFileList | Select-Object -Unique).Count
     Write-Host " [i] Total video files found: $totalSessionItems" -ForegroundColor DarkGreen
     Write-Progress -Activity "Initializing Session" -Completed
@@ -1719,7 +1758,16 @@ foreach ($folderPath in $targetFolders) {
     $global:GroupMap = @{}
     $global:Counter = 1
     $folder = Get-Item -LiteralPath $folderPath.FullName
-    $mkvFiles = Get-ChildItem -LiteralPath $folder.FullName -Filter "*.mkv" | Sort-NaturalFiles
+    if ($folder -is [System.IO.DirectoryInfo]) {
+        $mkvFiles = Get-ChildItem -LiteralPath $folder.FullName -Filter "*.mkv" | Sort-NaturalFiles
+    } else {
+        if ($folder.FullName -like "*.mkv") {
+            $mkvFiles = @($folder)
+        } else {
+            $mkvFiles = @()
+        }
+    }
+    
     if ($mkvFiles.Count -eq 0) { continue }
     
     # --- DYNAMIC PADDING (PER FOLDER) ---
@@ -2740,17 +2788,26 @@ foreach ($folderPath in $targetFolders) {
                         
                         Invoke-MkvBackup -FilePath $fToFix.FullName -RootPath $anchorRoot
                         
-                        $parentDir = Split-Path $anchorRoot -Parent
-                        $rootName = Split-Path $anchorRoot -Leaf
-                        $backupRootPath = Join-Path $parentDir "$($rootName)_updated"
+                        # Resolve the root to its parent directory if the path is a direct file
+                        $isFile = [System.IO.File]::Exists($anchorRoot)
+                        $resolvedAnchor = if ($isFile) { Split-Path $anchorRoot -Parent } else { $anchorRoot }
+                        
+                        if ($isFile) {
+                            $backupRootPath = Join-Path $resolvedAnchor "_updated"
+                        } else {
+                            $parentDir = Split-Path $resolvedAnchor -Parent
+                            $rootName = Split-Path $resolvedAnchor -Leaf
+                            $backupRootPath = Join-Path $parentDir "$($rootName)_updated"
+                        }
                         
                         $relativeDir = ""
                         $fParent = Split-Path $fToFix.FullName -Parent
-                        if ($fParent.Length -gt $anchorRoot.Length) {
-                            $relativeDir = $fParent.Substring($anchorRoot.Length).TrimStart('\')
+                        if ($fParent.Length -gt $resolvedAnchor.Length) {
+                            $relativeDir = $fParent.Substring($resolvedAnchor.Length).TrimStart('\')
                         }
                         
                         $targetFile = Join-Path $backupRootPath $relativeDir (Split-Path $fToFix.FullName -Leaf)
+                        
                     }
 
                     if ($targetFile -and (Test-Path -LiteralPath $targetFile)) {
@@ -2802,7 +2859,12 @@ if ($CurrentJob.Mode -eq "Standard" -and -not $AvcHigh10Search) {
         
         if ($Fix -and -not $FixNoBackup) {
             foreach ($p in $CurrentJob.TargetPaths) {
-                $targetUpdatePath = $p.TrimEnd('\') + "_updated"
+                if ([System.IO.File]::Exists($p)) {
+                    $parent = Split-Path $p -Parent
+                    $targetUpdatePath = Join-Path $parent "_updated" (Split-Path $p -Leaf)
+                } else {
+                    $targetUpdatePath = $p.TrimEnd('\') + "_updated"
+                }
                 if (Test-Path -LiteralPath $targetUpdatePath) { [void]$verifyPaths.Add($targetUpdatePath) }
             }
         } else {
