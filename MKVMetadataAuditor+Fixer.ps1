@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: MKVMetadataAuditor+Fixer.ps1
-# VERSION: 2026.06.05__12.44.00
+# VERSION: 2026.06.05__13.23.00
 # TARGET: PowerShell 7.6.2 LTS
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -125,7 +125,7 @@ if ($FixNoBackup) { $Fix = $true }
 if ($DeepSubtitleAuditDebugExtraction -or $DeepSubtitleAuditLanguageDetectionLimit2 -or $DeepSubtitleAuditNOLanguageDetection) { $DeepSubtitleAudit = $true }
 
 # --- GLOBAL VERSION DEFINITION ---
-$scriptVersion = "2026.06.05__12.44.00"
+$scriptVersion = "2026.06.05__13.23.00"
 
 # --- VERSION REPORTER ---
 if ($Version) {
@@ -1672,8 +1672,9 @@ $fastHeaderWritten = $false
 $logBuffer = New-Object System.Collections.Generic.List[string]
 $lastFlushTime = [DateTime]::Now
 
-# Folder Loop
 $videoExtensions = @("*.mkv", "*.mp4", "*.m4v", "*.avi", "*.wmv", "*.flv", "*.mov", "*.ts", "*.m2ts", "*.ogm")
+$searchFilter = if ($AvcHigh10Search) { $videoExtensions } else { "*.mkv" }
+
 $Host.PrivateData.ProgressForegroundColor = "Cyan"
 if ($fast) {
     $totalSessionItems = $targetFolders.Count
@@ -1690,12 +1691,14 @@ if ($fast) {
 
         # Differentiate between FileInfo and DirectoryInfo containers
         if ($folder -is [System.IO.DirectoryInfo]) {
-            $found = Get-ChildItem -LiteralPath $folder.FullName -Filter "*.mkv" -File -Force -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName
+            # Note: -Include is used when searching for multiple extensions
+            $found = Get-ChildItem -LiteralPath $folder.FullName -Include $searchFilter -File -Force -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName
             if ($found) { $found | ForEach-Object { $sessionFileList.Add([string]$_) } }
         } else {
-            if ($folder.FullName -like "*.mkv") {
-                $sessionFileList.Add($folder.FullName)
-            }
+            # Check if direct file input matches the current search scope
+            $isMatch = $false
+            foreach ($ext in $searchFilter) { if ($folder.Name -like $ext) { $isMatch = $true; break } }
+            if ($isMatch) { $sessionFileList.Add($folder.FullName) }
         }
     }
     
@@ -1750,9 +1753,13 @@ foreach ($folderPath in $targetFolders) {
     $global:Counter = 1
     $folder = Get-Item -LiteralPath $folderPath.FullName
     if ($folder -is [System.IO.DirectoryInfo]) {
-        $mkvFiles = Get-ChildItem -LiteralPath $folder.FullName -Filter "*.mkv" | Sort-NaturalFiles
+        # Using -Include for multi-extension support when -AvcHigh10Search is active
+        $mkvFiles = Get-ChildItem -LiteralPath $folder.FullName -Include $searchFilter -File | Sort-NaturalFiles
     } else {
-        if ($folder.FullName -like "*.mkv") {
+        # Logic for when a single file is passed to the script
+        $isMatch = $false
+        foreach ($ext in $searchFilter) { if ($folder.Name -like $ext) { $isMatch = $true; break } }
+        if ($isMatch) {
             $mkvFiles = @($folder)
         } else {
             $mkvFiles = @()
