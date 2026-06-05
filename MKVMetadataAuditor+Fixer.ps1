@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: MKVMetadataAuditor+Fixer.ps1
-# VERSION: 2026.06.05__11.26.06
+# VERSION: 2026.06.05__12.44.00
 # TARGET: PowerShell 7.6.2 LTS
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -125,7 +125,7 @@ if ($FixNoBackup) { $Fix = $true }
 if ($DeepSubtitleAuditDebugExtraction -or $DeepSubtitleAuditLanguageDetectionLimit2 -or $DeepSubtitleAuditNOLanguageDetection) { $DeepSubtitleAudit = $true }
 
 # --- GLOBAL VERSION DEFINITION ---
-$scriptVersion = "2026.06.05__11.26.06"
+$scriptVersion = "2026.06.05__12.44.00"
 
 # --- VERSION REPORTER ---
 if ($Version) {
@@ -310,83 +310,74 @@ function Get-SubtitleExtension {
 }
 
 function Detect-SubtitleLanguage {
-    param([string]$Text, [string]$CurrentLang, [switch]$Honorifics)
-    if ([string]::IsNullOrWhiteSpace($text)) { return "und" }
+    param(
+        [string]$Text, 
+        [string]$CurrentLang, 
+        [switch]$Honorifics, 
+        [switch]$DevDebug,
+        [string]$TrackID,
+        [string]$Selector,
+        [string]$TrackName
+    )
+
+    if ($DevDebug) {
+        $nameDisplay = if ($TrackName) { " ($TrackName)" } else { " (Unnamed)" }
+        Write-Host "    [DevDebug-DSA] Language Detection Probe | ID: $TrackID [$Selector]$nameDisplay" -ForegroundColor Cyan
+    }
+
+    if ([string]::IsNullOrWhiteSpace($text)) { 
+        if ($DevDebug) { Write-Host "      -> No usable text found after dialogue extraction (Stripped)." -ForegroundColor DarkYellow }
+        return "und" 
+    }
+    
     $total = $text.Length
     
     # 1. Non-Latin Unique Scripts
-    # if ([regex]::Matches($text, "[\u0E00-\u0E7F]").Count / $total -gt 0.15) { return "tha" } # Thai
-    if ([regex]::Matches($text, "[\uAC00-\uD7AF]").Count / $total -gt 0.15) { return "kor" } # Hangul
-    if ([regex]::Matches($text, "[\u3040-\u309F\u30A0-\u30FF]").Count / $total -gt 0.05) { return "jpn" } # Kana
-    if ([regex]::Matches($text, "[\u4E00-\u9FFF]").Count / $total -gt 0.15) { return "chi" } # Han
-    <# Disabled Non-Target Scripts
-    if ([regex]::Matches($text, "[\u0370-\u03FF]").Count / $total -gt 0.15) { return "gre" } # Greek
-    if ([regex]::Matches($text, "[\u0590-\u05FF]").Count / $total -gt 0.15) { return "heb" } # Hebrew
-    if ([regex]::Matches($text, "[\u0900-\u097F]").Count / $total -gt 0.15) { return "hin" } # Hindi (Devanagari)
-    #>
+    $korCount = [regex]::Matches($text, "[\uAC00-\uD7AF]").Count
+    $jpnCount = [regex]::Matches($text, "[\u3040-\u309F\u30A0-\u30FF]").Count
+    $chiCount = [regex]::Matches($text, "[\u4E00-\u9FFF]").Count
 
-    # 2. Cyrillic Differentiation (Disabled)
-    <#
-    $cyrCount = [regex]::Matches($text, "[\u0400-\u04FF]").Count
-    if ($cyrCount / $total -gt 0.15) {
-        if ($text -match "[ґєіїҐЄІЇ]") { return "ukr" }
-        return "rus"
+    if ($DevDebug) {
+        $pKor = [Math]::Round(($korCount / $total) * 100, 2); $pJpn = [Math]::Round(($jpnCount / $total) * 100, 2); $pChi = [Math]::Round(($chiCount / $total) * 100, 2)
+        Write-Host "      -> Metrics: Chars Analyzed: $total" -ForegroundColor Gray
+        Write-Host "      -> Script Density: Korean: $pKor% | Japanese: $pJpn% | Chinese: $pChi%" -ForegroundColor Gray
     }
-    #>
 
-    # 3. Arabic Script Differentiation (Disabled)
-    <#
-    $araCount = [regex]::Matches($text, "[\u0600-\u06FF]").Count
-    if ($araCount / $total -gt 0.15) {
-        if ($text -match "[پچژگ]") { return "per" }
-        return "ara"
-    }
-    #>
+    if ($korCount / $total -gt 0.15) { if ($DevDebug) { Write-Host "      -> MATCH: Korean (Hangul)" -ForegroundColor Green }; return "kor" }
+    if ($jpnCount / $total -gt 0.05) { if ($DevDebug) { Write-Host "      -> MATCH: Japanese (Kana)" -ForegroundColor Green }; return "jpn" }
+    if ($chiCount / $total -gt 0.15) { if ($DevDebug) { Write-Host "      -> MATCH: Chinese (Han)" -ForegroundColor Green }; return "chi" }
+
     
-    # 4. Latin-Based Language Detection
+    # 2. Latin-Based Language Detection
     $latin = [regex]::Matches($text, "[\u0000-\u007F\u0080-\u00FF\u0100-\u017F\u1E00-\u1EFF]").Count
     if ($latin / $total -gt 0.5) {
-        
-        # --- Disabled Latin-Based False Positive Generators ---
-        <#
-        if ($text -match "[đĐ]|[ấầẩẫậếềểễệốồổỗộắằẳẵặ]") { return "vie" }
-        if ($text -match "[ąćęłńóśźżĄĆĘŁŃÓŚŹŻ]") { return "pol" }
-        if ([regex]::Matches($text, "[ıİğşĞŞ]").Count -gt 5) {
-            if ($text -match "\b(?:bir|ve|bu|da|de|için|çok|o|ne)\b") { return "tur" }
-        }
-        $dutchStopwords = "\b(?:de|het|een|niet|van|ik|zijn|dat|voor|hebben|ook)\b"
-        $dutchMatches = [regex]::Matches($text, $dutchStopwords).Count
-        if ($dutchMatches -gt 15 -and ($text -match "\b(?:de|het|een)\b")) {
-            if ([regex]::Matches($text, "(?i)ij").Count -gt 5 -or ($text -match "\bik\b")) { return "dut" }
-        }
-        if ($text -match "\b(?:yang|dengan|untuk|adalah|paling|sebagai)\b") { return "ind" }
-        if ($text -match "[țșȚȘ]") { return "rum" }
-        if ($text -match "[øæØÆ]") { return "dan" } 
-        if ($text -match "ß" -or ([regex]::Matches($text, "[äöüÄÖÜ]").Count -gt 15)) { 
-            if ($text -match "\b(?:der|die|das|und|ist)\b") { return "ger" } 
-            if ($text -match "[åÅ]") { return "swe" } 
-        }
-        if ($text -match "[ñÑ¿¡]") { return "spa" }
-        if ($text -match "[ãÃõÕ]") { return "por" }
-        if ($text -match "[œŒ]" -or ([regex]::Matches($text, "[çÇêëâîû]").Count -gt 15)) { return "fre" }
-        if ($text -match "[ìÌòÒùÙ]") { return "ita" }
-        #>
+        if ($DevDebug) { Write-Host "      -> Latin Script Density: $([Math]::Round(($latin / $total) * 100, 2))%" -ForegroundColor Gray }
         
         # English Verification Logic (Hardened Stopwords)
-        # We focus on words that are common in English but rare/absent in Danish, Norwegian, and others.
-        # We also specifically check for 'the', the most common anchor in English.
         $engStopwords = "\b(the|you|with|this|they|have|from|would|should|could|there|their)\b"
         $engMatches = [regex]::Matches($text, $engStopwords).Count
         $theCount = [regex]::Matches($text, "\bthe\b").Count
+        $honMatches = if ($Honorifics) { [regex]::Matches($text, "-(?:san|kun|chan|sama|dono|senpai|kohai|sensei)\b").Count } else { 0 }
+
+        if ($DevDebug) {
+            Write-Host "      -> English Metrics: Stopwords: $engMatches (Min: 26) | 'The' Count: $theCount (Min: 6)" -ForegroundColor Gray
+            if ($Honorifics) { Write-Host "      -> Honorifics Metrics: Suffixes found: $honMatches (Min: 5)" -ForegroundColor Gray }
+        }
         
         # English and Honorifics (Remains Active)
-        if ($Honorifics -and ([regex]::Matches($text, "-(?:san|kun|chan|sama|dono|senpai|kohai|sensei)\b").Count -ge 5)) { return "enm" }
+        if ($Honorifics -and $honMatches -ge 5) { 
+            if ($DevDebug) { Write-Host "      -> MATCH: English (Japanese Honorifics) [enm]" -ForegroundColor Green }
+            return "enm" 
+        }
         
         # Validation: Must have a healthy count of English-specific words AND include 'the'.
-        if ($engMatches -gt 25 -and $theCount -gt 5) { return "eng" }
+        if ($engMatches -gt 25 -and $theCount -gt 5) { 
+            if ($DevDebug) { Write-Host "      -> MATCH: English [eng]" -ForegroundColor Green }
+            return "eng" 
+        }
 
-        # Safety Fallback: If it's Latin but doesn't meet English/Honorific thresholds, 
-        # return the current header language. This prevents rebranding international subs as 'eng'.
+        # Safety Fallback
+        if ($DevDebug) { Write-Host "      -> NO MATCH: Fallback to header language ($CurrentLang)" -ForegroundColor DarkYellow }
         return $CurrentLang
     }
     return "und"
@@ -2366,7 +2357,19 @@ foreach ($folderPath in $targetFolders) {
                                                     
                                                     # Language Detection
                                                     if (-not $DeepSubtitleAuditNOLanguageDetection) {
-                                                        $detected = Detect-SubtitleLanguage -Text $cleanText -CurrentLang $sub.properties.language -Honorifics:$Honorifics
+                                                        # Resolve the 1-based selector (s1, s2, etc) for the display
+                                                        $allSubs = $fToFix.PristineJson.tracks | Where-Object { $_.type -eq "subtitles" }
+                                                        $subIdx = [array]::IndexOf($allSubs, $sub) + 1
+                                                        $tmpSel = "s$subIdx"
+
+                                                        $detected = Detect-SubtitleLanguage -Text $cleanText `
+                                                                                            -CurrentLang $sub.properties.language `
+                                                                                            -Honorifics:$Honorifics `
+                                                                                            -DevDebug:$DevDebug `
+                                                                                            -TrackID $sub.id `
+                                                                                            -Selector $tmpSel `
+                                                                                            -TrackName $sub.properties.track_name
+
                                                         $isAlreadyHon = ($sub.properties.language -eq "enm" -and $detected -eq "eng")
                                                         if (-not $isAlreadyHon -and $sub.properties.language -ne $detected -and $detected -ne "und") {
                                                             if ($DevDebug) { Write-Host "  [DevDebug-DSA] Lng Fix: Track $($sub.id) ($($sub.properties.language) -> $detected)" -ForegroundColor Yellow }
