@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: MKVMetadataAuditor+Fixer.ps1
-# VERSION: 2026.06.04__02.12.00
+# VERSION: 2026.06.04__20.23.00
 # TARGET: PowerShell 7.6.2 LTS
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -120,7 +120,7 @@ if ($FixNoBackup) { $Fix = $true }
 if ($DeepSubtitleAuditDebugExtraction -or $DeepSubtitleAuditLanguageDetectionLimit2 -or $DeepSubtitleAuditNOLanguageDetection) { $DeepSubtitleAudit = $true }
 
 # --- GLOBAL VERSION DEFINITION ---
-$scriptVersion = "2026.06.04__02.12.00"
+$scriptVersion = "2026.06.04__20.23.00"
 
 # --- VERSION REPORTER ---
 if ($Version) {
@@ -212,17 +212,43 @@ function Get-ExclusionList {
 function Get-TargetFolders {
     param(
         [string[]]$InputPaths,
-        [switch]$DisableRecurse
+        [switch]$DisableRecurse,
+        [switch]$DevDebug
     )
     
-    $folders = if ($DisableRecurse) {
-        $InputPaths | ForEach-Object { Get-Item -LiteralPath $_ }
-    } else {
-        Get-ChildItem -LiteralPath $InputPaths -Directory -Recurse
+    $resolvedFolders = New-Object System.Collections.Generic.List[PSObject]
+    $seenPaths = New-Object System.Collections.Generic.HashSet[string]
+
+    foreach ($path in $InputPaths) {
+        try {
+            # Use .NET Direct API to bypass PowerShell provider limitations with characters like '!' and '['
+            $di = [System.IO.DirectoryInfo]::new($path)
+            if (-not $di.Exists) { continue }
+
+            # Add the root itself
+            if ($seenPaths.Add($di.FullName)) { [void]$resolvedFolders.Add($di) }
+
+            if (-not $DisableRecurse) {
+                # Use EnumerationOptions to bypass inaccessible/system directories gracefully
+                $enumOptions = [System.IO.EnumerationOptions]::new()
+                $enumOptions.RecurseSubdirectories = $true
+                $enumOptions.IgnoreInaccessible = $true
+                
+                $subFolders = $di.EnumerateDirectories("*", $enumOptions)
+                foreach ($sub in $subFolders) {
+                    if ($seenPaths.Add($sub.FullName)) { [void]$resolvedFolders.Add($sub) }
+                }
+            }
+        } catch {
+            if ($DevDebug) { Write-Host " [DevDebug-Scanner] Error resolving path: $path - $($_.Exception.Message)" -ForegroundColor Red }
+        }
     }
 
-    # Combine input roots with discovered subfolders and sort naturally
-    return (@($InputPaths | ForEach-Object { Get-Item -LiteralPath $_ }) + $folders | Select-Object -Unique) | Sort-Natural
+    if ($DevDebug) {
+        Write-Host " [DevDebug-Scanner] Total Folders Discovered: $($resolvedFolders.Count)" -ForegroundColor Gray
+    }
+
+    return $resolvedFolders | Sort-Natural
 }
 
 function Test-IsExcluded {
@@ -271,77 +297,84 @@ function Get-SubtitleExtension {
 }
 
 function Detect-SubtitleLanguage {
-    param([string]$Text, [switch]$Honorifics)
+    param([string]$Text, [string]$CurrentLang, [switch]$Honorifics)
     if ([string]::IsNullOrWhiteSpace($text)) { return "und" }
     $total = $text.Length
     
     # 1. Non-Latin Unique Scripts
-    if ([regex]::Matches($text, "[\u0E00-\u0E7F]").Count / $total -gt 0.15) { return "tha" } # Thai
+    # if ([regex]::Matches($text, "[\u0E00-\u0E7F]").Count / $total -gt 0.15) { return "tha" } # Thai
     if ([regex]::Matches($text, "[\uAC00-\uD7AF]").Count / $total -gt 0.15) { return "kor" } # Hangul
     if ([regex]::Matches($text, "[\u3040-\u309F\u30A0-\u30FF]").Count / $total -gt 0.05) { return "jpn" } # Kana
     if ([regex]::Matches($text, "[\u4E00-\u9FFF]").Count / $total -gt 0.15) { return "chi" } # Han
+    <# Disabled Non-Target Scripts
     if ([regex]::Matches($text, "[\u0370-\u03FF]").Count / $total -gt 0.15) { return "gre" } # Greek
     if ([regex]::Matches($text, "[\u0590-\u05FF]").Count / $total -gt 0.15) { return "heb" } # Hebrew
     if ([regex]::Matches($text, "[\u0900-\u097F]").Count / $total -gt 0.15) { return "hin" } # Hindi (Devanagari)
+    #>
 
-    # 2. Cyrillic Differentiation (Russian vs Ukrainian)
+    # 2. Cyrillic Differentiation (Disabled)
+    <#
     $cyrCount = [regex]::Matches($text, "[\u0400-\u04FF]").Count
     if ($cyrCount / $total -gt 0.15) {
         if ($text -match "[ґєіїҐЄІЇ]") { return "ukr" }
         return "rus"
     }
+    #>
 
-    # 3. Arabic Script Differentiation (Arabic vs Persian/Farsi)
+    # 3. Arabic Script Differentiation (Disabled)
+    <#
     $araCount = [regex]::Matches($text, "[\u0600-\u06FF]").Count
     if ($araCount / $total -gt 0.15) {
         if ($text -match "[پچژگ]") { return "per" }
         return "ara"
     }
+    #>
     
     # 4. Latin-Based Language Detection
     $latin = [regex]::Matches($text, "[\u0000-\u007F\u0080-\u00FF\u0100-\u017F\u1E00-\u1EFF]").Count
     if ($latin / $total -gt 0.5) {
-        # High-Priority Markers (Unique characters)
+        
+        # --- Disabled Latin-Based False Positive Generators ---
+        <#
         if ($text -match "[đĐ]|[ấầẩẫậếềểễệốồổỗộắằẳẵặ]") { return "vie" }
         if ($text -match "[ąćęłńóśźżĄĆĘŁŃÓŚŹŻ]") { return "pol" }
-        
-        # Turkish Protection (Stopwords + Character Frequency)
         if ([regex]::Matches($text, "[ıİğşĞŞ]").Count -gt 5) {
             if ($text -match "\b(?:bir|ve|bu|da|de|için|çok|o|ne)\b") { return "tur" }
         }
-
-        # Dutch Protection (The "De/Het/Een" Rule)
-        # Dutch articles 'de', 'het', and 'een' are extremely high frequency.
-        # We also check for 'ik' (I) and 'niet' (not) while avoiding Japanese overlaps.
         $dutchStopwords = "\b(?:de|het|een|niet|van|ik|zijn|dat|voor|hebben|ook)\b"
         $dutchMatches = [regex]::Matches($text, $dutchStopwords).Count
         if ($dutchMatches -gt 15 -and ($text -match "\b(?:de|het|een)\b")) {
-            # Only confirm Dutch if the core articles are present alongside 'ij' or 'ik'
-            if ([regex]::Matches($text, "(?i)ij").Count -gt 5 -or ($text -match "\bik\b")) {
-                return "dut"
-            }
+            if ([regex]::Matches($text, "(?i)ij").Count -gt 5 -or ($text -match "\bik\b")) { return "dut" }
         }
-
-        # Indonesian/Malay Protection (Unique Stopwords)
-        # 'yang' and 'dengan' are extremely high frequency and unique to this region.
         if ($text -match "\b(?:yang|dengan|untuk|adalah|paling|sebagai)\b") { return "ind" }
-
         if ($text -match "[țșȚȘ]") { return "rum" }
-        if ($text -match "[øæØÆ]") { return "dan" } # Danish/Norwegian
-        
-        # Lower-Priority Multi-Match Markers
+        if ($text -match "[øæØÆ]") { return "dan" } 
         if ($text -match "ß" -or ([regex]::Matches($text, "[äöüÄÖÜ]").Count -gt 15)) { 
-            if ($text -match "\b(?:der|die|das|und|ist)\b") { return "ger" } # Verify German words vs Finnish/Swedish
-            if ($text -match "[åÅ]") { return "swe" } # Swedish
+            if ($text -match "\b(?:der|die|das|und|ist)\b") { return "ger" } 
+            if ($text -match "[åÅ]") { return "swe" } 
         }
         if ($text -match "[ñÑ¿¡]") { return "spa" }
         if ($text -match "[ãÃõÕ]") { return "por" }
         if ($text -match "[œŒ]" -or ([regex]::Matches($text, "[çÇêëâîû]").Count -gt 15)) { return "fre" }
         if ($text -match "[ìÌòÒùÙ]") { return "ita" }
+        #>
         
-        # English and Honorifics
+        # English Verification Logic (Hardened Stopwords)
+        # We focus on words that are common in English but rare/absent in Danish, Norwegian, and others.
+        # We also specifically check for 'the', the most common anchor in English.
+        $engStopwords = "\b(the|you|with|this|they|have|from|would|should|could|there|their)\b"
+        $engMatches = [regex]::Matches($text, $engStopwords).Count
+        $theCount = [regex]::Matches($text, "\bthe\b").Count
+        
+        # English and Honorifics (Remains Active)
         if ($Honorifics -and ([regex]::Matches($text, "-(?:san|kun|chan|sama|dono|senpai|kohai|sensei)\b").Count -ge 5)) { return "enm" }
-        return "eng"
+        
+        # Validation: Must have a healthy count of English-specific words AND include 'the'.
+        if ($engMatches -gt 25 -and $theCount -gt 5) { return "eng" }
+
+        # Safety Fallback: If it's Latin but doesn't meet English/Honorific thresholds, 
+        # return the current header language. This prevents rebranding international subs as 'eng'.
+        return $CurrentLang
     }
     return "und"
 }
@@ -1588,7 +1621,9 @@ function Write-InlineProgress {
         [int]$Total,
         [string]$Message
     )
-    $percent = [Math]::Min(100, [Math]::Max(0, [int]($Current / $Total * 100)))
+    # Prevent Divide-by-Zero if no files are found
+    if ($Total -eq 0) { $percent = 0 } 
+    else { $percent = [Math]::Min(100, [Math]::Max(0, [int]($Current / $Total * 100))) }
     $width = 30 
     $done = [Math]::Min($width, [int]($percent / 100 * $width))
     $left = $width - $done
@@ -1607,7 +1642,7 @@ function Write-InlineProgress {
 # Includes the base folders themselves PLUS all sub-directories
 
 # --- FOLDER DISCOVERY ---
-$targetFolders = Get-TargetFolders -InputPaths $inputPaths -DisableRecurse $disableRecurse
+$targetFolders = Get-TargetFolders -InputPaths $inputPaths -DisableRecurse:$disableRecurse -DevDebug:$DevDebug
 
 $fastHeaderWritten = $false
 
@@ -1629,7 +1664,10 @@ if ($fast) {
         $folderCounter++
         Write-Progress -Activity "Initializing Session" -Status "Scanning Folder $folderCounter of $($targetFolders.Count)" -PercentComplete ([int]($folderCounter / $targetFolders.Count * 100))
         
-        $found = Get-ChildItem -LiteralPath $folder.FullName -Include $videoExtensions -File -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName
+        if ($DevDebug) { Write-Host " [DevDebug-Scanner] Scanning Folder: $($folder.FullName)" -ForegroundColor DarkGray }
+
+        # Use Filter with -Force to ensure all valid MKVs are counted regardless of attributes
+        $found = Get-ChildItem -LiteralPath $folder.FullName -Filter "*.mkv" -File -Force -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName
         if ($found) { $found | ForEach-Object { $sessionFileList.Add([string]$_) } }
     }
     $totalSessionItems = ($sessionFileList | Select-Object -Unique).Count
@@ -1639,7 +1677,7 @@ if ($fast) {
 $sessionProgressIndex = 0
 foreach ($folderPath in $targetFolders) {
     # [MODULE] Check for Exclusions
-    if (Test-IsExcluded -CurrentPath $folderPath.FullName -Exclusions $exclusions -Active $excludePaths) {
+    if (Test-IsExcluded -CurrentPath $folderPath.FullName -Exclusions $exclusions -Active:$excludePaths) {
         Write-Host " [SKIP] Folder excluded by rule: $($folderPath.Name)" -ForegroundColor DarkGray
             
         # [CHANGE] v2026.05.29__13.26.15 - Formatted Exclusion Block for Detail Log
@@ -2276,11 +2314,11 @@ foreach ($folderPath in $targetFolders) {
                                                 $isImageSub = ($sub.codec -match "PGS|VobSub")
                                                 
                                                 if (-not $isImageSub) {
-                                                    $cleanText = Extract-DialogueText -Path $probeFile -OutPath (Join-Path $tempDir "track$($sub.id)_cleaned.txt") -DevDebug $DevDebug
+                                                    $cleanText = Extract-DialogueText -Path $probeFile -OutPath (Join-Path $tempDir "track$($sub.id)_cleaned.txt") -DevDebug:$DevDebug
                                                     
                                                     # Language Detection
                                                     if (-not $DeepSubtitleAuditNOLanguageDetection) {
-                                                        $detected = Detect-SubtitleLanguage -Text $cleanText -Honorifics:$Honorifics
+                                                        $detected = Detect-SubtitleLanguage -Text $cleanText -CurrentLang $sub.properties.language -Honorifics:$Honorifics
                                                         $isAlreadyHon = ($sub.properties.language -eq "enm" -and $detected -eq "eng")
                                                         if (-not $isAlreadyHon -and $sub.properties.language -ne $detected -and $detected -ne "und") {
                                                             if ($DevDebug) { Write-Host "  [DevDebug-DSA] Lng Fix: Track $($sub.id) ($($sub.properties.language) -> $detected)" -ForegroundColor Yellow }
@@ -2500,10 +2538,10 @@ foreach ($folderPath in $targetFolders) {
                         $subRelativeIndex++
                         $scoring = Get-TrackScore -t $t -fixerConfig $fixerConfig `
                                                  -subRelativeIndex $subRelativeIndex `
-                                                 -Honorifics $Honorifics `
-                                                 -SubtitleFactorTrackOrder $SubtitleFactorTrackOrder `
-                                                 -Western $Western `
-                                                 -SubtitlesHearingImpaired $SubtitlesHearingImpaired
+                                                 -Honorifics:$Honorifics `
+                                                 -SubtitleFactorTrackOrder:$SubtitleFactorTrackOrder `
+                                                 -Western:$Western `
+                                                 -SubtitlesHearingImpaired:$SubtitlesHearingImpaired
 
                         # 4. ADD TO LIST (No filter here - we need to see the "bad" tracks to fix them)
                         $subCandidates += [PSCustomObject]@{
