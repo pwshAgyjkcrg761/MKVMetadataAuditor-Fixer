@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: MKVMetadataAuditor+Fixer.ps1
-# VERSION: 2026.06.05__15.58.00
+# VERSION: 2026.06.06__04.10.00
 # TARGET: PowerShell 7.6.2 LTS
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -125,7 +125,7 @@ if ($FixNoBackup) { $Fix = $true }
 if ($DeepSubtitleAuditDebugExtraction -or $DeepSubtitleAuditLanguageDetectionLimit2 -or $DeepSubtitleAuditNOLanguageDetection) { $DeepSubtitleAudit = $true }
 
 # --- GLOBAL VERSION DEFINITION ---
-$scriptVersion = "2026.06.05__15.58.00"
+$scriptVersion = "2026.06.06__04.10.00"
 
 # --- VERSION REPORTER ---
 if ($Version) {
@@ -399,15 +399,15 @@ function Detect-SubtitleLanguage {
         $engStopwords = "\b(the|you|with|this|they|have|from|would|should|could|there|their)\b"
         $engMatches = [regex]::Matches($text, $engStopwords).Count
         $theCount = [regex]::Matches($text, "\bthe\b").Count
-        $honMatches = if ($Honorifics) { [regex]::Matches($text, "-(?:san|kun|chan|sama|dono|senpai|kohai|sensei)\b").Count } else { 0 }
+        $honMatches = if ($Honorifics) { [regex]::Matches($text, "-(?:san|kun|chan|sama|dono|senpai|kohai|sensei|niisan|niichan|neesan|neechan|jiisan|jiichan|baasan|baachan|shisou|heika|denka|kakka|tan|chama)\b").Count } else { 0 }
 
         if ($DevDebug) {
             Write-Host "      -> English Metrics: Stopwords: $engMatches (Min: 26) | 'The' Count: $theCount (Min: 6)" -ForegroundColor Gray
-            if ($Honorifics) { Write-Host "      -> Honorifics Metrics: Suffixes found: $honMatches (Min: 5)" -ForegroundColor Gray }
+            if ($Honorifics) { Write-Host "      -> Honorifics Metrics: Suffixes found: $honMatches (Min: 1)" -ForegroundColor Gray }
         }
         
         # English and Honorifics (Remains Active)
-        if ($Honorifics -and $honMatches -ge 5) { 
+        if ($Honorifics -and $honMatches -ge 1) { 
             if ($DevDebug) { Write-Host "      -> MATCH: English (Japanese Honorifics) [enm]" -ForegroundColor Green }
             return "enm" 
         }
@@ -2303,7 +2303,7 @@ foreach ($folderPath in $targetFolders) {
                             
                             # --- STAGE 1: DISCOVERY & ELIGIBILITY ---
                             if ($null -eq $currentGroup.PSObject.Properties[$fileGuid]) {
-                                $allSubs = $fToFix.PristineJson.tracks | Where-Object { $_.type -eq "subtitles" }
+                                $allSubs = @($fToFix.PristineJson.tracks | Where-Object { $_.type -eq "subtitles" })
 
                                 if ($DevDebug) {
                                     Write-Host "  [DevDebug-DSA] Checking file at path: $($fToFix.FullName)" -ForegroundColor Gray
@@ -2419,7 +2419,7 @@ foreach ($folderPath in $targetFolders) {
                                                     # Language Detection
                                                     if (-not $DeepSubtitleAuditNOLanguageDetection) {
                                                         # Resolve the 1-based selector (s1, s2, etc) for the display
-                                                        $allSubs = $fToFix.PristineJson.tracks | Where-Object { $_.type -eq "subtitles" }
+                                                        $allSubs = @($fToFix.PristineJson.tracks | Where-Object { $_.type -eq "subtitles" })
                                                         $subIdx = [array]::IndexOf($allSubs, $sub) + 1
                                                         $tmpSel = "s$subIdx"
 
