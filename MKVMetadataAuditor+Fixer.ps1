@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: MKVMetadataAuditor+Fixer.ps1
-# VERSION: 2026.06.06__04.10.00
+# VERSION: 2026.06.06__08.42.00
 # TARGET: PowerShell 7.6.2 LTS
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -125,7 +125,7 @@ if ($FixNoBackup) { $Fix = $true }
 if ($DeepSubtitleAuditDebugExtraction -or $DeepSubtitleAuditLanguageDetectionLimit2 -or $DeepSubtitleAuditNOLanguageDetection) { $DeepSubtitleAudit = $true }
 
 # --- GLOBAL VERSION DEFINITION ---
-$scriptVersion = "2026.06.06__04.10.00"
+$scriptVersion = "2026.06.06__08.42.00"
 
 # --- VERSION REPORTER ---
 if ($Version) {
@@ -2433,7 +2433,7 @@ foreach ($folderPath in $targetFolders) {
 
                                                         $isAlreadyHon = ($sub.properties.language -eq "enm" -and $detected -eq "eng")
                                                         if (-not $isAlreadyHon -and $sub.properties.language -ne $detected -and $detected -ne "und") {
-                                                            if ($DevDebug) { Write-Host "  [DevDebug-DSA] Lng Fix: Track $($sub.id) ($($sub.properties.language) -> $detected)" -ForegroundColor Yellow }
+                                                            if ($DevDebug) { Write-Host "  [DevDebug-DSA] Lng Fix: Track $($sub.id + 1) ($($sub.properties.language) -> $detected)" -ForegroundColor Yellow }
                                                             $sub | Add-Member -NotePropertyName "DSA_DetectedLang" -NotePropertyValue $detected -Force
                                                         }
                                                     }
@@ -2502,7 +2502,7 @@ foreach ($folderPath in $targetFolders) {
                                     if ($DevDebug) {
                                         $displayWeight = if ($isText) { $w1 } else { "$([Math]::Round($w1 / 1kb, 2)) KB" }
                                         $displayLimit  = if ($isText) { $minThreshold } else { "$([Math]::Round($minThreshold / 1kb, 2)) KB" }
-                                        Write-Host "  [DevDebug-DSA] Single Track Analysis: ID:$($t1.id) | Weight: $displayWeight | Threshold: $displayLimit" -ForegroundColor Gray
+                                        Write-Host "  [DevDebug-DSA] Single Track Analysis: Track:$($t1.id + 1) | Weight: $displayWeight | Threshold: $displayLimit" -ForegroundColor Gray
                                         Write-Host "  [DevDebug-DSA] Result: $(if ($passedDensity) { "Passed (Dialogue)" } else { "Failed (S&S/Low Density)" })" -ForegroundColor $(if ($passedDensity) { "Green" } else { "DarkYellow" })
                                     }
 
@@ -2627,8 +2627,8 @@ foreach ($folderPath in $targetFolders) {
                                             if ($t.id -eq $ambiguousTracks[0].id) {
                                                 if ($DevDebug) { 
                                                     if ($actionMsg -match "SWAP|FIX") {
-                                                        Write-Host "  [DevDebug-DSA] Found ID:$($ambiguousTracks[0].id) Name: $($dsaCtx.OriginalNames[$ambiguousTracks[0].id])" -ForegroundColor Gray
-                                                        Write-Host "  [DevDebug-DSA] Found ID:$($ambiguousTracks[1].id) Name: $($dsaCtx.OriginalNames[$ambiguousTracks[1].id])" -ForegroundColor Gray
+                                                        Write-Host "  [DevDebug-DSA] Found Track:$($ambiguousTracks[0].id + 1) Name: $($dsaCtx.OriginalNames[$ambiguousTracks[0].id])" -ForegroundColor Gray
+                                                        Write-Host "  [DevDebug-DSA] Found Track:$($ambiguousTracks[1].id + 1) Name: $($dsaCtx.OriginalNames[$ambiguousTracks[1].id])" -ForegroundColor Gray
                                                     }
                                                     $consoleMsg = $actionMsg -replace '^\[DSA\]', '[DevDebug-DSA]'
                                                     $msgColor = if ($actionMsg -match "SWAP|FIX") { "DarkYellow" } else { "Green" }
