@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: MKVMetadataAuditor+Fixer.ps1
-# VERSION: 2026.06.06__20.21.00
+# VERSION: 2026.06.06__20.37.00
 # TARGET: PowerShell 7.6.2 LTS
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -125,7 +125,7 @@ if ($FixNoBackup) { $Fix = $true }
 if ($DeepSubtitleAuditDebugExtraction -or $DeepSubtitleAuditLanguageDetectionLimit2 -or $DeepSubtitleAuditNOLanguageDetection) { $DeepSubtitleAudit = $true }
 
 # --- GLOBAL VERSION DEFINITION ---
-$scriptVersion = "2026.06.06__20.21.00"
+$scriptVersion = "2026.06.06__20.37.00"
 
 # --- VERSION REPORTER ---
 if ($Version) {
@@ -408,14 +408,14 @@ function Detect-SubtitleLanguage {
             if ($Honorifics) { Write-Host "      -> Honorifics Metrics: Suffixes found: $honMatches (Min: 1)" -ForegroundColor Gray }
         }
         
-        # English and Honorifics (Remains Active)
-        if ($Honorifics -and $honMatches -ge 1) { 
-            if ($DevDebug) { Write-Host "      -> MATCH: English (Japanese Honorifics) [enm]" -ForegroundColor Green }
-            return "enm" 
-        }
-        
         # Validation: Must have a healthy count of English-specific words AND include 'the'.
-        if ($engMatches -gt 25 -and $theCount -gt 5) { 
+        $isEnglish = ($engMatches -gt 25 -and $theCount -gt 5)
+
+        if ($isEnglish) {
+            if ($Honorifics -and $honMatches -ge 1) { 
+                if ($DevDebug) { Write-Host "      -> MATCH: English (Japanese Honorifics) [enm]" -ForegroundColor Green }
+                return "enm" 
+            }
             if ($DevDebug) { Write-Host "      -> MATCH: English [eng]" -ForegroundColor Green }
             return "eng" 
         }
