@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: MKVMetadataAuditor+Fixer.ps1
-# VERSION: 2026.06.06__12.09.00
+# VERSION: 2026.06.06__16.16.00
 # TARGET: PowerShell 7.6.2 LTS
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -56,8 +56,8 @@ param (
     [Alias("ovrd")]
     [switch]$overrideDefaults,
     
-    [Alias("h10p")]
-    [switch]$AvcHigh10Search,
+    [Alias("nohw")]
+    [switch]$NoHwVideoSearch,
     
     [switch]$fast,
     [Alias("lfp")]
@@ -125,7 +125,7 @@ if ($FixNoBackup) { $Fix = $true }
 if ($DeepSubtitleAuditDebugExtraction -or $DeepSubtitleAuditLanguageDetectionLimit2 -or $DeepSubtitleAuditNOLanguageDetection) { $DeepSubtitleAudit = $true }
 
 # --- GLOBAL VERSION DEFINITION ---
-$scriptVersion = "2026.06.06__12.09.00"
+$scriptVersion = "2026.06.06__16.16.00"
 
 # --- VERSION REPORTER ---
 if ($Version) {
@@ -275,7 +275,7 @@ function Test-IsExcluded {
 }
 
 # [FROM: MKVMetadataAuditor+Fixer.SearchH10P.ps1]
-function Test-IsHigh10 {
+function Test-IsNoHw {
     param(
         [string]$FilePath,
         [string]$MediaInfoPath
@@ -284,7 +284,7 @@ function Test-IsHigh10 {
     
     # 1. Validation: Check if the file is accessible and if MediaInfo can see its format
     if (-not (Test-Path -LiteralPath $FilePath)) {
-        return [PSCustomObject]@{ IsHigh10 = $false; IsReadable = $false; Error = "File Not Found" }
+        return [PSCustomObject]@{ IsNoHw = $false; IsReadable = $false; Error = "File Not Found" }
     }
 
     $genFormat = ""
@@ -306,38 +306,48 @@ function Test-IsHigh10 {
 
         # 2. Track Check: Skip profile checks if no video is present (e.g., audio-only files)
         if ($vCount -eq "0" -or [string]::IsNullOrWhiteSpace($vCount)) {
-            return [PSCustomObject]@{ IsHigh10 = $false; IsReadable = $true; Format = "NoVideo"; Profile = "N/A" }
+            return [PSCustomObject]@{ IsNoHw = $false; IsReadable = $false; Error = "Unreadable Header/Corrupted" }
         }
 
-        # 3. Extraction: Get the specific profile and codec format
-        $profileRaw = & $MediaInfoPath --Inform="Video;%Format%|%Format_Profile%" "$FilePath"
-        if ($profileRaw -is [array]) { $profileRaw = $profileRaw[0] }
-        $vParts = "$profileRaw".Split('|')
+        # 3. Extraction: Get specific NoHW compatibility metrics
+        $miRaw = & $MediaInfoPath --Inform="Video;%ChromaSubsampling%|%ColorSpace%|%Format_Profile%|%Format%" "$FilePath"
+        if ($miRaw -is [array]) { $miRaw = $miRaw[0] }
+        $m = "$miRaw".Split('|')
         
-        $vFormat = if ($vParts.Count -gt 0) { $vParts[0].Trim() } else { "" }
-        $profile = if ($vParts.Count -gt 1) { $vParts[1].Trim() } else { "" }
+        $isHi10 = ($m[2] -match "High 10")
+        $is422  = ($m[0] -eq "4:2:2")
+        $is444  = ($m[0] -eq "4:4:4")
+        $isRGB  = ($m[1] -eq "RGB")
 
         return [PSCustomObject]@{ 
-            IsHigh10   = ($profile -match "High.*10")
+            IsNoHw     = ($isHi10 -or $is444 -or $is422 -or $isRGB)
             IsReadable = $true
-            Format     = $vFormat
-            Profile    = $profile
+            Format     = $m[3]
+            Profile    = $m[2]
+            Chroma     = $m[0]
+            Space      = $m[1]
+            Flags      = @(
+                if ($isHi10) { "AVC Hi10P" }
+                if ($is422)  { "Chroma 4:2:2" }
+                if ($is444)  { "Chroma 4:4:4" }
+                if ($isRGB)  { "RGB" }
+            ) -join ', '
         }
     } catch {
-        return [PSCustomObject]@{ IsHigh10 = $false; IsReadable = $false; Error = "CLI Execution Error" }
+        return [PSCustomObject]@{ IsNoHw = $false; IsReadable = $false; Error = "CLI Execution Error" }
     }
 }
 
-function Get-H10PLogHeader {
+function Get-NoHwLogHeader {
     param([switch]$Fast)
     $ts = Get-Date -Format "yyyy-MM-dd HH:mm"
     $lines = New-Object System.Collections.Generic.List[string]
-    $lines.Add("----------------------------------------------")
+    $lines.Add("-" * 89)
     $lines.Add($ts)
     if ($Fast) { $lines.Add("Fast Scan - First File in Each Folder Only") }
-    $lines.Add("AVC High 10 Profile Found")
-    $lines.Add("Recommend convert to HEVC Main 10")
-    $lines.Add("----------------------------------------------")
+    $lines.Add("NoHW Compatibility Issues Found (Hi10P/4:4:4/4:2:2/RGB)")
+    $lines.Add("Recommend convert to HEVC Main 10, Chroma Subsampling: 4:2:0, Color Space: YUV")
+    $lines.Add("-" * 89)
     $lines.Add("")
     return $lines
 }
@@ -907,9 +917,9 @@ function Show-ProjectManual {
     "      Sets defaults for Western media (English audio/subs).`n"
 )
 
-    &$PrintManualBlock "  -AvcHigh10Search | -h10p" @(
-    "      Search Mode: Scans for AVC High 10 (10-bit) video streams. Use",
-    "      with -fast for quicker scanning.`n"
+    &$PrintManualBlock "  -NoHwVideoSearch | -nohw | -h10p" @(
+    "      Search Mode: Scans for NoHW compatibility issues (Hi10P, Chroma 4:2:2,",
+    "      Chroma 4:4:4, or RGB). Use with -fast for quicker scanning.`n"
 )    
     
     &$PrintManualBlock "  -fast" @(
@@ -1095,9 +1105,9 @@ foreach ($part in $PathParts) {
 
 # --- SEARCH FLAG RESTRICTION ---
 #       Modified for Global Debug 
-if (($PSBoundParameters.ContainsKey('fast') -or $PSBoundParameters.ContainsKey('LogFullPath')) -and -not $AvcHigh10Search) {
+if (($PSBoundParameters.ContainsKey('fast') -or $PSBoundParameters.ContainsKey('LogFullPath')) -and -not $NoHwVideoSearch) {
     Write-Host "`n[ERROR] Search-specific flag(s) detected." -ForegroundColor DarkRed
-    Write-Host "The flags -fast and -lfp require -h10p (AvcHigh10Search) to be active.`n" -ForegroundColor DarkYellow
+    Write-Host "The flags -fast and -lfp require -nohw (NoHwVideoSearch) to be active.`n" -ForegroundColor DarkYellow
     exit
 }
 
@@ -1133,8 +1143,8 @@ if ($OverrideWesternDefaults -and -not $Western) {
     exit
 }
 
-# AVC High 10 Profile Whitelist Validation
-if ($AvcHigh10Search) {
+# NoHW Video Search Whitelist Validation
+if ($NoHwVideoSearch) {
     
     # Block the -fast + -nr combination to prevent a "1-file-only" scan
     if ($fast -and $disableRecurse) {
@@ -1148,15 +1158,15 @@ if ($AvcHigh10Search) {
     }
     
     # Define exactly what IS allowed
-    $allowedH10pFlags = @('AvcHigh10Search', 'Fast', 'disableRecurse', 'Path', 'h10p', 'h10pDebug', 'PathParts', 'ep', 'excludePaths', 'LogFullPath', 'lfp', 'DevDebug')
+    $allowedNoHwFlags = @('NoHwVideoSearch', 'Fast', 'disableRecurse', 'Path', 'nohw', 'PathParts', 'ep', 'excludePaths', 'LogFullPath', 'lfp', 'DevDebug')
 
     # Check every flag the user actually typed
     foreach ($param in $PSBoundParameters.Keys) {
-        if ($param -notin $allowedH10pFlags) {
+        if ($param -notin $allowedNoHwFlags) {
             Write-Host ""
             Write-Host " [!] ERROR: Invalid flag combination." -ForegroundColor DarkRed
-            Write-Host " When using -h10p, you cannot use -$param." -ForegroundColor DarkYellow
-            Write-Host " Permitted with -h10p: -Fast, -disableRecurse, and -Path." -ForegroundColor Gray
+            Write-Host " When using -nohw, you cannot use -$param." -ForegroundColor DarkYellow
+            Write-Host " Permitted with -nohw: -Fast, -disableRecurse, and -Path." -ForegroundColor Gray
             Write-Host ""
             exit
         }
@@ -1241,7 +1251,7 @@ if ($DelLog) {
 $pLogDir = Join-Path $rootLog "Path_Logs"; $dLogDir = Join-Path $rootLog "Detail_Logs"
 $mLogDir = Join-Path $rootLog "Mismatch_Logs"; $cLogDir = Join-Path $rootLog "Comparison_Logs"
 $fLogDir = Join-Path $rootLog "FIX_QUEUE"
-$h10pLogDir = Join-Path $rootLog "AVC_High_10_Profile_Logs"
+$noHwLogDir = Join-Path $rootLog "NoHw_Logs"
 $vLogDir = Join-Path $rootLog "Updates_Verification_Logs"
 $tLogDir = Join-Path $rootLog "DevDebug-Terminal_Logs"
 
@@ -1249,7 +1259,7 @@ $tLogDir = Join-Path $rootLog "DevDebug-Terminal_Logs"
 $ts = Get-Date -Format "yyyy-MM-dd_HH-mm-ss"
 
 # Create the folders
-foreach ($dir in @($rootLog,$pLogDir,$dLogDir,$mLogDir,$cLogDir,$fLogDir,$h10pLogDir,$vLogDir,$tLogDir)) { 
+foreach ($dir in @($rootLog,$pLogDir,$dLogDir,$mLogDir,$cLogDir,$fLogDir,$noHwLogDir,$vLogDir,$tLogDir)) { 
     if (-not (Test-Path $dir)) { New-Item $dir -ItemType Directory | Out-Null } 
 }
 
@@ -1259,7 +1269,7 @@ $detailLog = Join-Path $dLogDir "MKVMetadataAuditor+Fixer_Details_$($ts)-log.txt
 $missLog = Join-Path $mLogDir "MKVMetadataAuditor+Fixer_Mismatches_$($ts)-log.txt"
 $compLog = Join-Path $cLogDir "MKVMetadataAuditor+Fixer_Comparison_$($ts)-log.txt"
 $fixerLog = Join-Path $fLogDir "MKVMetadataAuditor+Fixer_FIX_QUEUE_$($ts)-log.txt"
-$h10pLog = Join-Path $h10pLogDir "MKVMetadataAuditor+Fixer_AVC_High_10_$($ts)-log.txt"
+$noHwLog = Join-Path $noHwLogDir "MKVMetadataAuditor+Fixer_NoHw_$($ts)-log.txt"
 $verifyLog = Join-Path $vLogDir "MKVMetadataAuditor+Fixer_Updates_Verification_$($ts)-log.txt"
 $terminalLog = Join-Path $tLogDir "MKVMetadataAuditor+Fixer_DevDebug-Terminal_$($ts)-log.txt"
 
@@ -1277,8 +1287,8 @@ if (Test-Path $script:GlobalTemp) {
 }
 New-Item -Path $script:GlobalTemp -ItemType Directory | Out-Null
 
-$h10pList = New-Object System.Collections.Generic.List[string]
-$h10pCount = 0
+$noHwList = New-Object System.Collections.Generic.List[string]
+$noHwCount = 0
 $corruptCount = 0
 
 # --- EXCLUSION INITIALIZATION ---
@@ -1481,11 +1491,11 @@ $uiversion = $scriptVersion
 # Determine Display Mode, Action, and Override Status
 $GlobalDebugStatus = if ($DevDebug) { " [DEBUG]" } else { "" }
 
-if ($AvcHigh10Search -or $h10p) {
+if ($NoHwVideoSearch) {
     $fastStatus = if ($fast) { " Fast" } else { "" }
     $recurseStatus = if ($disableRecurse) { " [No-Recurse]" } else { "" }
-    $h10pLogFullPathStatus = if ($LogFullPath) { " Log Full Path" } else { "" }
-    $displayMode = "AVC High 10 Search Mode$fastStatus$recurseStatus$h10pLogFullPathStatus$GlobalDebugStatus"
+    $noHwLogFullPathStatus = if ($LogFullPath) { " Log Full Path" } else { "" }
+    $displayMode = "NoHW Video Search Mode$fastStatus$recurseStatus$noHwLogFullPathStatus$GlobalDebugStatus"
 } else {
     $modeBase = if ($Western) { "Western Mode" } else { "Anime Mode (default)" }
     $sdhStatus = if ($SubtitlesHearingImpaired) { " SDH" } else { "" }
@@ -1602,12 +1612,12 @@ if ($VerifyUpdates) {
 Write-Host "--------------------------------------------------"
 
 # Determine Start Message
-$startMessage = if ($AvcHigh10Search -and $Fast -and $LogFullPath) { 
-    "Begin AVC High 10 Profile Search Fast with Log Full File Path?" 
-} elseif ($AvcHigh10Search -and $Fast) { 
-    "Begin AVC High 10 Profile Search Fast?"
-} elseif ($AvcHigh10Search) { 
-    "Begin AVC High 10 Profile Search?"
+$startMessage = if ($NoHwVideoSearch -and $Fast -and $LogFullPath) { 
+    "Begin NoHW Video Search Fast with Log Full File Path?" 
+} elseif ($NoHwVideoSearch -and $Fast) { 
+    "Begin NoHW Video Search Fast?"
+} elseif ($NoHwVideoSearch) { 
+    "Begin NoHW Video Search?"
 } elseif ($Fix -and $FixNoBackup -and $VerifyUpdates) { 
     "Begin Auditing and Fixing with NO BACKUP then Verify?"    
 } elseif ($Fix -and $FixNoBackup) { 
@@ -1640,7 +1650,7 @@ Write-Host "Starting..." -ForegroundColor DarkGreen
 $AuditJobs = New-Object System.Collections.Generic.List[PSObject]
 $AuditJobs.Add([PSCustomObject]@{ TargetPaths = $inputPaths; ActiveLog = $detailLog; Mode = "Standard" })
 
-if ($VerifyUpdates -and -not $AvcHigh10Search -and $verifyPaths.Count -gt 0) {
+if ($VerifyUpdates -and -not $NoHwVideoSearch -and $verifyPaths.Count -gt 0) {
     $AuditJobs.Add([PSCustomObject]@{ TargetPaths = $verifyPaths; ActiveLog = $verifyLog; Mode = "Verification" })
 }
 
@@ -1714,7 +1724,7 @@ $videoExtensions = @(
     "*.f4v", "*.qt", "*.m4b", "*.m4r", "*.mxf", 
     "*.vob"
 )
-$searchFilter = if ($AvcHigh10Search) { $videoExtensions } else { "*.mkv" }
+$searchFilter = if ($NoHwVideoSearch) { $videoExtensions } else { "*.mkv" }
 
 $Host.PrivateData.ProgressForegroundColor = "Cyan"
 if ($fast) {
@@ -1789,7 +1799,7 @@ foreach ($folderPath in $targetFolders) {
         continue
     }
     
-    if (-not $AvcHigh10Search -or $DevDebug) {
+    if (-not $NoHwVideoSearch -or $DevDebug) {
         Write-Host "Checking: $($folderPath.FullName)..." -ForegroundColor Gray # <--- LIVE FEEDBACK
     }
     $global:GroupMap = @{}
@@ -1813,7 +1823,7 @@ foreach ($folderPath in $targetFolders) {
     
     # --- DYNAMIC PADDING (PER FOLDER) ---
     # [FIX] v2026.05.15_15.02.00 - Bypass probes if searching to match Finder speed
-    if (-not $AvcHigh10Search) {
+    if (-not $NoHwVideoSearch) {
         $allCodecs = foreach ($f in $mkvFiles) { (& $mkvmerge -J $f.FullName | ConvertFrom-Json).tracks.codec }
         $codecPadding = [Math]::Max(5, ($allCodecs | Measure-Object -Property Length -Maximum).Maximum)
         
@@ -1826,94 +1836,93 @@ foreach ($folderPath in $targetFolders) {
     }
     $propPadding = 9
     
-    # High10P SCAN (MediaInfo)
+    # NoHW Video SCAN (MediaInfo)
     # This runs BEFORE the auditor/grouping logic so it actually sees the files
-    # --- SEARCH LOGIC (REPLACE THE High 10 SECTION INSIDE THE FOLDER LOOP) ---
+    # --- SEARCH LOGIC (NoHW Compatibility Engine) ---
 
     
     # v2026.05.13_16.08.00 - Finalized Spacing & One-Time Fast Header
-    if ($AvcHigh10Search) {
+    if ($NoHwVideoSearch) {
         $scanFiles = if ($fast) { $mkvFiles | Select-Object -First 1 } else { $mkvFiles }
-        $currentFileIndex = 0
+        $foundFlags = New-Object System.Collections.Generic.HashSet[string]
         
         foreach ($f in $scanFiles) {
             $sessionProgressIndex++
-            
-            # Call the custom Auditor function
-            # Update the progress bar only every 10 files (or if it's the last file)
             if ($sessionProgressIndex % 10 -eq 0 -or $sessionProgressIndex -eq $totalSessionItems) {
                 $statusMsg = if ($fast) { "Processing Folders" } else { "Processing Files" }
                 Write-InlineProgress -Current $sessionProgressIndex -Total $totalSessionItems -Message $statusMsg
             }
             
-            # Write-Progress -Activity "Total Session Progress" -Status $statusMsg -PercentComplete $percent
-            # If debugging, ensure we move to a new line so the bar remains visible
             if ($DevDebug) { 
-                Write-Host "`n [DevDebug-H10P] File Path: $($f.FullName)" -ForegroundColor Gray
-                Write-Host " [DevDebug-H10P] File Name: $($f.Name)" -ForegroundColor DarkGray
+                Write-Host "`n [DevDebug-NoHW] File Path: $($f.FullName)" -ForegroundColor Gray
+                Write-Host " [DevDebug-NoHW] File Name: $($f.Name)" -ForegroundColor DarkGray
             }
-            $status = Test-IsHigh10 -FilePath $f.FullName -MediaInfoPath $mediainfo
+
+            $status = Test-IsNoHw -FilePath $f.FullName -MediaInfoPath $mediainfo
             
             if ($DevDebug) {
                 if (-not $status.IsReadable) { 
-                    Write-Host " [DevDebug-H10P] Status: ERROR | $($status.Error)" -ForegroundColor Red 
+                    Write-Host " [DevDebug-NoHW] Status: ERROR | $($status.Error)" -ForegroundColor Red 
                 } else {
-                    Write-Host " [DevDebug-H10P] Status: $($status.Format) | $($status.Profile)" -ForegroundColor Gray
+                    Write-Host " [DevDebug-NoHW] Status: $($status.Format) | $($status.Profile) | $($status.Chroma) | $($status.Space)" -ForegroundColor Gray
                 }
             }
 
             if (-not $status.IsReadable) {
-                # Log Unreadable Files
                 $corruptCount++
-                $h10pList.Add("[ERROR] UNREADABLE: $($f.FullName) - Reason: $($status.Error)")
-                Write-Host "`n"
-                Write-Host "  [!] CORRUPT/UNREADABLE FILE FOUND:" -ForegroundColor DarkRed
-                Write-Host "      Name: $($f.Name)" -ForegroundColor DarkYellow
-                Write-Host "      Path: $($f.FullName)" -ForegroundColor Gray
+                $noHwList.Add("[ERROR] UNREADABLE: $($f.FullName) - Reason: $($status.Error)")
+                Write-Host "`n  [!] CORRUPT/UNREADABLE FILE FOUND: $($f.Name)" -ForegroundColor DarkRed
             }
-            elseif ($status.IsHigh10) {
-                $h10pCount++
+            elseif ($status.IsNoHw) {
+                $noHwCount++
                 
-                # Logic: If Fast mode and no FullPath requested, log the Folder Path for the exclusion list.
+                # Collect Detected Flags for the Folder Entry
+                if ($status.Flags -match "Hi10P") { [void]$foundFlags.Add("🔟[NoHW: AVC Hi10P]") }
+                if ($status.Flags -match "4:2:2") { [void]$foundFlags.Add("🎨[NoHW: Chroma 4:2:2]") }
+                if ($status.Flags -match "4:4:4") { [void]$foundFlags.Add("🎨[NoHW: Chroma 4:4:4]") }
+                if ($status.Flags -match "RGB")   { [void]$foundFlags.Add("🌈[NoHW: RGB]") }
+
                 $entryToAdd = if ($fast -and -not $LogFullPath) { $folderPath.FullName.TrimEnd('\') } else { $f.FullName }
-                $h10pList.Add($entryToAdd)
+                $noHwList.Add($entryToAdd)
                 
-                Write-Host "`n"
-                Write-Host "  [!] Found AVC High 10: $($f.Name)" -ForegroundColor DarkYellow
+                Write-Host "`n  [!] Found NoHW ($($status.Flags)): $($f.Name)" -ForegroundColor DarkYellow
             }
         }
+        # Sorts alphabetically by the text inside the brackets (ignoring the emoji)
+        $sortedFlags = $foundFlags | Sort-Object { $_ -replace '^[^\[]+', '' }
+        $folderFoundLabel = if ($foundFlags.Count -gt 0) { "Found: " + ($sortedFlags -join ' ') } else { "" }
         Write-Host "" # Clears the inline progress line
         
         # v2026.05.13_16.32.00 - Periodic 60-Second Flush
-        if ($h10pList.Count -gt 0) {
+        if ($noHwList.Count -gt 0) {
             $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm"
 
-            if ($fast) {
-                # Add content to buffer for Fast Mode
-                if (-not $fastHeaderWritten) {
-                    foreach ($hLine in (Get-H10PLogHeader -Fast)) { $logBuffer.Add($hLine) }
-                    $fastHeaderWritten = $true
-                }
-                foreach ($line in $h10pList) { $logBuffer.Add($line) }
-            } else {
-                # Add content to buffer for Standard Mode
-                $leadingSpace = (Test-Path $h10pLog) -or ($logBuffer.Count -gt 0) ? "`r`n" : ""
-                $logBuffer.Add("$leadingSpace----------------------------------------------")
-                $logBuffer.Add($timestamp)
-                $logBuffer.Add("Folder: $($folderPath.FullName)")
-                $logBuffer.Add("AVC High 10 Profile Found")
-                $logBuffer.Add("Recommend convert to HEVC Main 10")
-                $logBuffer.Add("----------------------------------------------")
+            
+            # Detailed Block Construction
+            $border = "-" * 89
+            $leadingSpace = (Test-Path $noHwLog) -or ($logBuffer.Count -gt 0) ? "`r`n" : ""
+            
+            $logBuffer.Add("$leadingSpace$border")
+            $logBuffer.Add($timestamp)
+            if ($fast) { $logBuffer.Add("Fast Scan - First File in Each Folder Only") }
+            $logBuffer.Add("Folder: $($folderPath.FullName)")
+            if ($folderFoundLabel) { $logBuffer.Add($folderFoundLabel) }
+            $logBuffer.Add("Recommend convert to HEVC Main 10, Chroma Subsampling: 4:2:0, Color Space: YUV")
+            $logBuffer.Add($border)
+
+            # In Standard mode, list the files below the border. In Fast mode, end the block at the border.
+            if (-not $fast) {
                 $logBuffer.Add("")
-                foreach ($line in $h10pList) { $logBuffer.Add($line) }
+                foreach ($line in $noHwList) { $logBuffer.Add($line) }
             }
-            $h10pList.Clear()
+            
+            $noHwList.Clear()
         }
 
         # CHECK TIMER: If 60 seconds passed, flush to disk
         if (([DateTime]::Now - $lastFlushTime).TotalSeconds -ge 60 -and $logBuffer.Count -gt 0) {
             Write-Host " [i] 60s Elapsed: Flushing log buffer to disk..." -ForegroundColor Cyan
-            $logBuffer | Out-File -FilePath $h10pLog -Append -Encoding utf8
+            $logBuffer | Out-File -FilePath $noHwLog -Append -Encoding utf8
             $logBuffer.Clear()
             $lastFlushTime = [DateTime]::Now
         }
@@ -1932,7 +1941,7 @@ foreach ($folderPath in $targetFolders) {
     }
 
     # --- GROUPING LOGIC ---
-    if ($AvcHigh10Search) {
+    if ($NoHwVideoSearch) {
         Write-Host " [✓] AVC High 10 Scan complete for this folder." -ForegroundColor DarkGreen
     } else {
         $mkvCount = $mkvFiles.Count
@@ -1970,13 +1979,13 @@ foreach ($folderPath in $targetFolders) {
                 $sig.Split("`n") | ForEach-Object { Write-Host "    $($_.Trim())" -ForegroundColor Gray }
             }
             
-            # --- SEPARATE AVC HIGH 10 SEARCH ---
-            if ($AvcHigh10Search -and (Test-Path -LiteralPath $mediainfo)) {
-                $profile = & $mediainfo --Inform="Video;%Format_Profile%" "$($f.FullName)"
-                if ($profile -match "High@10") {
-                    $h10pCount++
-                    $h10pList.Add($f.FullName)
-                    Write-Host " [!] Found AVC High 10: $($f.Name)" -ForegroundColor DarkYellow
+            # --- SEPARATE NOHW VIDEO SEARCH ---
+            if ($NoHwVideoSearch -and (Test-Path -LiteralPath $mediainfo)) {
+                $status = Test-IsNoHw -FilePath $f.FullName -MediaInfoPath $mediainfo
+                if ($status.IsNoHw) {
+                    $noHwCount++
+                    $noHwList.Add($f.FullName)
+                    Write-Host " [!] Found NoHW ($($status.Flags)): $($f.Name)" -ForegroundColor DarkYellow
                 }
             }
             
@@ -1995,10 +2004,10 @@ foreach ($folderPath in $targetFolders) {
         }
         
         # v2026.05.13_10.43.00 - Real-time Console Feedback
-        if ($AvcHigh10Search) {
+        if ($NoHwVideoSearch) {
             Write-Host "" # New line
-            if ($h10pList.Count -gt 0) {
-                Write-Host " [!] Found $($h10pList.Count) High 10 files in: $($folder.Name)" -ForegroundColor DarkYellow
+            if ($noHwList.Count -gt 0) {
+                Write-Host " [!] Found $($noHwList.Count) NoHW files in: $($folder.Name)" -ForegroundColor DarkYellow
             } else {
                 Write-Host " [✓] No High 10 files in: $($folder.Name)" -ForegroundColor DarkGreen
             }
@@ -2906,7 +2915,7 @@ foreach ($folderPath in $targetFolders) {
     
     
     # --- STANDARD AUDITOR LOGGING ---
-    # This only runs if $AvcHigh10Search is FALSE because of the 'continue' above
+    # This only runs if $NoHwVideoSearch is FALSE because of the 'continue' above
     $spacer = "`r`n💜 • 💙 • 🦋 • ❤️ • 💛 • 🦋 • 💜 • 💙 • 🦋 • ❤️ • 💛 • 🦋 • 💜 • 💙 • 🦋 • ❤️ • 💛`r`n"
     $spacer | Out-File $detailLog -Append -Encoding utf8
     
@@ -2918,7 +2927,7 @@ foreach ($folderPath in $targetFolders) {
     
 } # <--- END FOLDER LOOP
 
-if ($CurrentJob.Mode -eq "Standard" -and -not $AvcHigh10Search) {
+if ($CurrentJob.Mode -eq "Standard" -and -not $NoHwVideoSearch) {
     Write-Host "`n [✓] Standard Audit Complete." -ForegroundColor Green
     if ($Fix) {
         if ($script:FilesModifiedInJob -gt 0) {
@@ -2931,7 +2940,7 @@ if ($CurrentJob.Mode -eq "Standard" -and -not $AvcHigh10Search) {
 
 # --- DYNAMIC JOB DISCOVERY ---
     # After the 'Standard' pass ends, if Verify is enabled, look for the folders we just created
-    if ($CurrentJob.Mode -eq "Standard" -and $VerifyUpdates -and -not $AvcHigh10Search) {
+    if ($CurrentJob.Mode -eq "Standard" -and $VerifyUpdates -and -not $NoHwVideoSearch) {
         $verifyPaths = New-Object System.Collections.Generic.List[string]
         
         if ($Fix -and -not $FixNoBackup) {
@@ -2964,7 +2973,7 @@ if ($CurrentJob.Mode -eq "Verification") {
 
 # v2026.05.13_16.32.00 - Final Flush after loop ends
 if ($logBuffer.Count -gt 0) {
-    $logBuffer | Out-File -FilePath $h10pLog -Append -Encoding utf8
+    $logBuffer | Out-File -FilePath $noHwLog -Append -Encoding utf8
     $logBuffer.Clear()
 }
 
@@ -2974,13 +2983,13 @@ if ($logBuffer.Count -gt 0) {
 
 
 # --- FINAL GLOBAL SUMMARY ---
-if ($h10pCount -gt 0 -or $corruptCount -gt 0) {
+if ($noHwCount -gt 0 -or $corruptCount -gt 0) {
     Write-Host ""
     Write-Host "==================================================" -ForegroundColor DarkYellow
-    Write-Host " AVC HIGH 10 PROFILE SEARCH SUMMARY" -ForegroundColor DarkYellow
-    Write-Host " Total High 10 Found: $h10pCount" -ForegroundColor Gray
+    Write-Host " NoHW VIDEO SEARCH SUMMARY" -ForegroundColor DarkYellow
+    Write-Host " Total NoHW Found: $noHwCount" -ForegroundColor Gray
     Write-Host " Total Corrupt Found: $corruptCount" -ForegroundColor $(if ($corruptCount -gt 0) { "Red" } else { "Gray" })
-    Write-Host " Log: $h10pLog" -ForegroundColor Gray
+    Write-Host " Log: $noHwLog" -ForegroundColor Gray
     Write-Host "==================================================" -ForegroundColor DarkYellow
 }
 
