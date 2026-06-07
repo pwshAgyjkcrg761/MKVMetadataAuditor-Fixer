@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: MKVMetadataAuditor+Fixer.ps1
-# VERSION: 2026.06.06__20.37.00
+# VERSION: 2026.06.06__12.09.00
 # TARGET: PowerShell 7.6.2 LTS
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -14,7 +14,7 @@
 # ==============================================================================
 # AI INSTRUCTIONS: 
 # 1. HEADER: Update Version comment.
-#    - VERSIONING: Update using CHICAGO TIME (Central Time). 
+#    - VERSIONING: Update using CHICAGO TIME (Central Time), 24 hour clock. 
 #    - CRITICAL: Do not use AI system time. Use the time provided in the most 
 #      recent user prompt or link (Ref: https://www.timeanddate.com/worldclock/usa/chicago).
 #    - STAMP ACCURACY: Ensure the minutes match the current Chicago clock exactly.
@@ -125,7 +125,7 @@ if ($FixNoBackup) { $Fix = $true }
 if ($DeepSubtitleAuditDebugExtraction -or $DeepSubtitleAuditLanguageDetectionLimit2 -or $DeepSubtitleAuditNOLanguageDetection) { $DeepSubtitleAudit = $true }
 
 # --- GLOBAL VERSION DEFINITION ---
-$scriptVersion = "2026.06.06__20.37.00"
+$scriptVersion = "2026.06.06__12.09.00"
 
 # --- VERSION REPORTER ---
 if ($Version) {
@@ -485,7 +485,7 @@ function Get-AuditSelector {
 }
 
 function Get-AuditFlags {
-    param($tracks, $IsWestern, $fixerConfig, $Honorifics, $SubtitlesHearingImpaired)
+    param($tracks, $IsWestern, $fixerConfig, $Honorifics, $SubtitlesHearingImpaired, $FilePath, $MediaInfoPath)
     
     # Use Global Regex Patterns from Main Controller
     $RegexDiag = $script:RegexDiag
@@ -521,11 +521,17 @@ function Get-AuditFlags {
         $reasons += "⚠️👁️[Pref Subtitles NOT Default: $($prefSubLang.ToUpper())] "
     }
     
-    $vTrack = $tracks | Where-Object { $_.type -eq "video" } | Select-Object -First 1
-    if ($null -ne $vTrack) {
-        $privData = if ($null -ne $vTrack.properties.codec_private) { $vTrack.properties.codec_private } else { $vTrack.properties.codec_private_data }
-        if ($null -ne $privData -and $privData.Length -ge 4) {
-            if ($privData.Substring(2, 2) -eq "6e") { $reasons += "🔟[AVC High 10 Profile] " }
+        # --- DEEP VIDEO INSPECTION (NoHW Flags) ---
+    if (Test-Path -LiteralPath $MediaInfoPath) {
+        $miRaw = & $MediaInfoPath --Inform="Video;%ChromaSubsampling%|%ColorSpace%|%Format_Profile%|%Format%" "$FilePath"
+        if ($miRaw -is [array]) { $miRaw = $miRaw[0] }
+        $m = "$miRaw".Split('|')
+        
+        if ($m.Count -ge 4 -and $m[3] -ne '') {
+            if ($m[2] -match "High 10") { $reasons += "🔟 [NoHW: AVC Hi10P] " }
+            if ($m[0] -eq "4:2:2")      { $reasons += "🎨 [NoHW: Chroma 4:2:2] " }
+            if ($m[0] -eq "4:4:4")      { $reasons += "🎨 [NoHW: Chroma 4:4:4] " }
+            if ($m[1] -eq "RGB")        { $reasons += "🌈 [NoHW: RGB] " }
         }
     }
 
@@ -2020,7 +2026,7 @@ foreach ($folderPath in $targetFolders) {
             $stableIndex = $global:GroupMap[$sig]
             $isPrimary = ($g -eq 0)
             $repFile = $currentGroup.Files[0]
-            $reasons = Get-AuditFlags -tracks $currentGroup.Json.tracks -IsWestern $Western -fixerConfig $fixerConfig -Honorifics $Honorifics -SubtitlesHearingImpaired $SubtitlesHearingImpaired
+            $reasons = Get-AuditFlags -tracks $currentGroup.Json.tracks -IsWestern $Western -fixerConfig $fixerConfig -Honorifics $Honorifics -SubtitlesHearingImpaired $SubtitlesHearingImpaired -FilePath $repFile.FullName -MediaInfoPath $mediainfo
 
             
             $entry = New-Object System.Collections.Generic.List[string]
