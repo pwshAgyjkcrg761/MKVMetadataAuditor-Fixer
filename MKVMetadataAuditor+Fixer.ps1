@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: MKVMetadataAuditor+Fixer.ps1
-# VERSION: 2026.06.06__08.42.00
+# VERSION: 2026.06.06__20.21.00
 # TARGET: PowerShell 7.6.2 LTS
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -125,7 +125,7 @@ if ($FixNoBackup) { $Fix = $true }
 if ($DeepSubtitleAuditDebugExtraction -or $DeepSubtitleAuditLanguageDetectionLimit2 -or $DeepSubtitleAuditNOLanguageDetection) { $DeepSubtitleAudit = $true }
 
 # --- GLOBAL VERSION DEFINITION ---
-$scriptVersion = "2026.06.06__08.42.00"
+$scriptVersion = "2026.06.06__20.21.00"
 
 # --- VERSION REPORTER ---
 if ($Version) {
@@ -364,7 +364,9 @@ function Detect-SubtitleLanguage {
 
     if ($DevDebug) {
         $nameDisplay = if ($TrackName) { " ($TrackName)" } else { " (Unnamed)" }
-        Write-Host "    [DevDebug-DSA] Language Detection Probe | ID: $TrackID [$Selector]$nameDisplay" -ForegroundColor Cyan
+        # Map ID to human-readable Track (ID + 1)
+        $trackNum = [int]$TrackID + 1
+        Write-Host "    [DevDebug-DSA] Language Detection Probe | ID: $TrackID - Track $trackNum - [$Selector]$nameDisplay" -ForegroundColor Cyan
     }
 
     if ([string]::IsNullOrWhiteSpace($text)) { 
@@ -2400,7 +2402,7 @@ foreach ($folderPath in $targetFolders) {
                                             }
                                             
                                             $ext = Get-SubtitleExtension -Codec $sub.codec
-                                            $tmpPath = Join-Path $tempDir "track$($sub.id).$ext"
+                                            $tmpPath = Join-Path $tempDir "track$($sub.id + 1).$ext"
                                             $extractArgs.Add("$($sub.id):$tmpPath")
                                             $probeMap[$sub.id] = $tmpPath
                                         }
@@ -2414,7 +2416,7 @@ foreach ($folderPath in $targetFolders) {
                                                 $isImageSub = ($sub.codec -match "PGS|VobSub")
                                                 
                                                 if (-not $isImageSub) {
-                                                    $cleanText = Extract-DialogueText -Path $probeFile -OutPath (Join-Path $tempDir "track$($sub.id)_cleaned.txt") -DevDebug:$DevDebug
+                                                    $cleanText = Extract-DialogueText -Path $probeFile -OutPath (Join-Path $tempDir "track$($sub.id + 1)_cleaned.txt") -DevDebug:$DevDebug
                                                     
                                                     # Language Detection
                                                     if (-not $DeepSubtitleAuditNOLanguageDetection) {
@@ -2476,8 +2478,13 @@ foreach ($folderPath in $targetFolders) {
 
                                         # Cleanup artifacts
                                         if ($DevDebug) {
-                                            Write-Host "    [DevDebug-DSA] Final Weight ID:$($ambiguousTracks[0].id) ($($dsaCtx.Weights[$ambiguousTracks[0].id]))" -ForegroundColor Gray
-                                            if ($ambiguousTracks.Count -eq 2) { Write-Host "    [DevDebug-DSA] Final Weight ID:$($ambiguousTracks[1].id) ($($dsaCtx.Weights[$ambiguousTracks[1].id]))" -ForegroundColor Gray }
+                                            $allSubs = @($fToFix.PristineJson.tracks | Where-Object { $_.type -eq "subtitles" })
+                                            foreach ($sub in $ambiguousTracks) {
+                                                $sIdx = [array]::IndexOf($allSubs, $sub) + 1
+                                                $sSel = "s$sIdx"
+                                                $kb = [Math]::Round($dsaCtx.Weights[$sub.id] / 1024, 3)
+                                                Write-Host "    [DevDebug-DSA] Final Weight ID:$($sub.id) - Track $($sub.id + 1) - [$sSel]...($kb KB)" -ForegroundColor Gray
+                                            }
                                             Write-Host "    [DevDebug-DSA] Preservation Active: Files kept at -> $tempDir" -ForegroundColor DarkCyan
                                         } else {
                                             if (Test-Path $tempDir) { Remove-Item $tempDir -Recurse -Force -ErrorAction SilentlyContinue }
