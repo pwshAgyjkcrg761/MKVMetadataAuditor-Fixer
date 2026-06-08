@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: MKVMetadataAuditor+Fixer.ps1
-# VERSION: 2026.06.08__14.13.00
+# VERSION: 2026.06.08__15.13.00
 # TARGET: PowerShell 7.6.2 LTS
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -128,7 +128,7 @@ if ($FixNoBackup) { $Fix = $true }
 if ($DeepSubtitleAuditDebugExtraction -or $DeepSubtitleAuditLanguageDetectionLimit2 -or $DeepSubtitleAuditNOLanguageDetection) { $DeepSubtitleAudit = $true }
 
 # --- GLOBAL VERSION DEFINITION ---
-$scriptVersion = "2026.06.08__14.13.00"
+$scriptVersion = "2026.06.08__15.13.00"
 
 # --- VERSION REPORTER ---
 if ($Version) {
@@ -2924,6 +2924,7 @@ foreach ($folderPath in $targetFolders) {
                                             else { $targetSubLang }
 
                     # PREFERRED OR NOTHING: Use Effective Language to authorize the Default flag
+                    $winnerEffLang = if ($dsaDetected -and $dsaDetected -ne "und") { $dsaDetected } else { $winner.Lang }
                     $isWinnerValidForDefault = ($winnerEffLang -eq $targetSubLang) -or ($winnerEffLang -eq "und") -or $isWinnerHon
                     $targetDefaultValue = if ($isWinnerValidForDefault) { 1 } else { 0 }
 
