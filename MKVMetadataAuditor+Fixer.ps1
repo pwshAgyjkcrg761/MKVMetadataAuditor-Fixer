@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: MKVMetadataAuditor+Fixer.ps1
-# VERSION: 2026.06.08__07.05.00
+# VERSION: 2026.06.08__10.08.56
 # TARGET: PowerShell 7.6.2 LTS
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -128,7 +128,7 @@ if ($FixNoBackup) { $Fix = $true }
 if ($DeepSubtitleAuditDebugExtraction -or $DeepSubtitleAuditLanguageDetectionLimit2 -or $DeepSubtitleAuditNOLanguageDetection) { $DeepSubtitleAudit = $true }
 
 # --- GLOBAL VERSION DEFINITION ---
-$scriptVersion = "2026.06.08__07.05.00"
+$scriptVersion = "2026.06.08__10.08.56"
 
 # --- VERSION REPORTER ---
 if ($Version) {
@@ -2246,6 +2246,7 @@ foreach ($folderPath in $targetFolders) {
                 # 1. IDENTIFY TARGETS
                 Get-AuditSelector -Reset
                 $subRelativeIndex = 0
+                $dsaFileProcessed = $false
                 
                 # NEW: Define videoCount here so the check below works
                 $videoCount = ($fToFix.PristineJson.tracks | Where-Object { $_.type -eq "video" } | Measure-Object).Count
@@ -2320,7 +2321,8 @@ foreach ($folderPath in $targetFolders) {
                         
                         
                         # --- [DSA] DEEP SUBTITLE AUDIT ENGINE (LOG & DIALOGUE UPDATE) ---
-                        if ($DeepSubtitleAudit) {
+                        if ($DeepSubtitleAudit -and -not $dsaFileProcessed) {
+                            $dsaFileProcessed = $true
                             $fileGuid = "DSA_" + $fToFix.Name.GetHashCode().ToString('X')
                             
                             # --- STAGE 1: DISCOVERY & ELIGIBILITY ---
@@ -2459,10 +2461,15 @@ foreach ($folderPath in $targetFolders) {
 
                                                         # [FIX] Oscillation Prevention: Treat 'eng' and 'enm' as equivalent matches.
                                                         $isEngEnmEquivalent = ($sub.properties.language -match "eng|enm" -and $detected -match "eng|enm")
-                                                        # [FIX] Convergence: Treat 'eng' and 'enm' as equivalent.
+                                                        
+                                                        # [MOD] Always record detection in memory (even if header is already 'eng') so Naming Engine can verify honorific status.
+                                                        if ($detected -ne "und" -and -not $sub.PSObject.Properties['DSA_DetectedLang']) {
+                                                            $sub | Add-Member -NotePropertyName "DSA_DetectedLang" -NotePropertyValue $detected -Force
+                                                        }
+
+                                                        # [FIX] Convergence: Only fix header if not equivalent (prevents eng <-> enm loops)
                                                         if (-not $isEngEnmEquivalent -and $sub.properties.language -ne $detected -and $detected -ne "und") {
                                                             if ($DevDebug) { Write-Host "  [DevDebug-DSA] Lng Fix: Track $($sub.id + 1) ($($sub.properties.language) -> $detected)" -ForegroundColor Yellow }
-                                                            $sub | Add-Member -NotePropertyName "DSA_DetectedLang" -NotePropertyValue $detected -Force
                                                         }
                                                     }
                                                     $dsaCtx.Weights[$sub.id] = $cleanText.Length
@@ -2535,16 +2542,12 @@ foreach ($folderPath in $targetFolders) {
                                             if ($Fix) { $Params += @('--edit', "track:$($tH.id + 1)", '--set', "language=eng") }
                                         }
 
-                                        # 2. Smart Naming: Convergence Check
-                                        if ($curName -match "Honorifics" -and $curName -match "Full Dialogue") {
-                                            $tH.properties | Add-Member -NotePropertyName "DSA_Handled" -NotePropertyValue $true -Force
-                                            continue 
-                                        }
-
-                                        # Sanitization: Symbols first, then Role Keywords
+                                        # 2. Smart Naming: Standardize via Sanitization
+                                        # First, extract group by stripping role keywords
                                         $cleanGroupName = ($curName -replace '[\(\)\[\]\{\}\-\.\:]', ' ' -replace $roleFilter, ' ').Trim() -replace '\s+', ' '
                                         $newName = if ([string]::IsNullOrWhiteSpace($cleanGroupName)) { "Honorifics Full Dialogue" } else { "Honorifics Full Dialogue [$cleanGroupName]" }
                                         
+                                        # Final Comparison: Only update if standardized name differs from current name
                                         if ($newName -ne $curName) {
                                             $needsChange = $true
                                             if ($Fix) {
@@ -2552,6 +2555,9 @@ foreach ($folderPath in $targetFolders) {
                                                 $tH.properties | Add-Member -NotePropertyName "track_name" -NotePropertyValue $newName -Force
                                             }
                                             [void]$fixDetails.Add("  [DSA] UNIVERSAL-HONORIFIC: Tagged track $($tH.id + 1) as Honorifics.")
+                                        }
+                                        else {
+                                            if ($DevDebug) { Write-Host "    [DevDebug-DSA] Track $($tH.id + 1) naming is already standardized. Skipping update." -ForegroundColor Gray }
                                         }
                                         $tH.properties | Add-Member -NotePropertyName "DSA_Handled" -NotePropertyValue $true -Force
                                     }
@@ -2719,14 +2725,14 @@ foreach ($folderPath in $targetFolders) {
                                                     $consoleMsg = $actionMsg -replace '^\[DSA\]', '[DevDebug-DSA]'
                                                     $msgColor = if ($actionMsg -match "SWAP|FIX") { "DarkYellow" } else { "Green" }
                                                     Write-Host "  $consoleMsg" -ForegroundColor $msgColor 
-                                                }
+                                                } # Closes: if ($Fix) [Inside Condition 3.2 Fix Garbage/Missing Names]
                                                 [void]$fixDetails.Add("  $actionMsg")
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
+                                            } # Closes: if ($t.id -eq $ambiguousTracks[0].id) [Reporting Guard]
+                                        } # Closes: if ($ratio -ge $dynRatio -and $isDualEng) [Dual English Ratio Evaluation]
+                                    } # Closes: if ($w1 -gt 0 -or $w2 -gt 0) [Zero Safety Gate]
+                                } # Closes: if ($ambiguousTracks.Count -eq 2 -and ...) [Stage 3 Exact 2 Tracks Only]
+                            } # Closes: if ($null -ne $dsaCtx) [Stage 2/3 Context Verification]
+                        } # Closes: if ($DeepSubtitleAudit -and -not $dsaFileProcessed) [Main DSA Engine Open]
                         # --- END DSA ENGINE ---
                         
                         $trackLang = $t.properties.language.ToLower()
