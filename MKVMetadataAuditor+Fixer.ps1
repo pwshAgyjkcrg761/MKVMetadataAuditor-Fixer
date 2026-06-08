@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: MKVMetadataAuditor+Fixer.ps1
-# VERSION: 2026.06.08__13.12.00
+# VERSION: 2026.06.08__14.13.00
 # TARGET: PowerShell 7.6.2 LTS
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -128,7 +128,7 @@ if ($FixNoBackup) { $Fix = $true }
 if ($DeepSubtitleAuditDebugExtraction -or $DeepSubtitleAuditLanguageDetectionLimit2 -or $DeepSubtitleAuditNOLanguageDetection) { $DeepSubtitleAudit = $true }
 
 # --- GLOBAL VERSION DEFINITION ---
-$scriptVersion = "2026.06.08__13.12.00"
+$scriptVersion = "2026.06.08__14.13.00"
 
 # --- VERSION REPORTER ---
 if ($Version) {
@@ -441,42 +441,78 @@ function Detect-SubtitleLanguage {
 }
 
 function Extract-DialogueText {
-    param($Path, [string]$OutPath, [switch]$DevDebug)
+    param($Path, [string]$OutPath, [switch]$DevDebug, [int]$MaxLength = [int]::MaxValue)
     if ($Path -match "\.(sup|sub)$") { return "IMAGE_SUB_BYPASS" }
 
-    $sb = New-Object System.Text.StringBuilder
-    $content = Get-Content $Path -Raw -Encoding utf8 -ErrorAction SilentlyContinue
-    if ($content -match "[\u0000]") { $content = Get-Content $Path -Raw -Encoding ansi }
-    $lines = $content -split "`r?`n"
+    # Compile Regex patterns once for maximum loop speed
+    if (-not $script:RegexCleanBrackets) {
+        $script:RegexCleanBrackets = [regex]::new('\{.*?\}', 'Compiled')
+        $script:RegexCleanSlashN   = [regex]::new('\\[Nnh]', 'Compiled')
+        $script:RegexCleanHTML     = [regex]::new('<.*?>', 'Compiled')
+        $script:RegexLetterMatch   = [regex]::new('\p{L}[,.?!]', 'Compiled')
+        $script:RegexDrawCheck     = [regex]::new('\\(?:p[1-9]|clip|iclip|move|org|t)\b', 'Compiled')
+        $script:RegexSyncCheck     = [regex]::new('(?:sync|karaoke|fx|ktp|auto)', 'Compiled')
+        $script:RegexTechCheck     = [regex]::new('(?i)(?:circle|square|box|rectangle|line|triangle|oval|star|polygon|cm|mm|width|height|depth|circ|vert|horiz)', 'Compiled')
+        $script:RegexCoordinateDraw = [regex]::new('(?i)^[mb]\s-?\d+', 'Compiled')
+    }
+
+    $sb = [System.Text.StringBuilder]::new()
     
+    $encoding = [System.Text.Encoding]::UTF8
+    try {
+        $fs = [System.IO.File]::OpenRead($Path)
+        $buffer = [byte[]]::new(1024)
+        $bytesRead = $fs.Read($buffer, 0, 1024)
+        $fs.Close()
+        $hasNull = $false
+        for ($i = 0; $i -lt $bytesRead; $i++) {
+            if ($buffer[$i] -eq 0) { $hasNull = $true; break }
+        }
+        if ($hasNull) {
+            $encoding = [System.Text.Encoding]::Default
+        }
+    } catch {}
+
+    $lines = [System.IO.File]::ReadLines($Path, $encoding)
     $isASS = $Path -match "\.(ass|ssa)$"
-    $history = New-Object System.Collections.Generic.List[string]
+    $history = [System.Collections.Generic.List[string]]::new()
 
     foreach ($line in $lines) {
-        $line = $line.Trim()
         if ($isASS) {
-            if ($line -match "^Dialogue:") {
-                if ($line -match "\\(?:p[1-9]|clip|iclip|move|org|t)\b") { continue }
-                $parts = $line -split ",", 10
-                if ($parts.Count -eq 10) {
-                    if ($parts[8] -match "(?:sync|karaoke|fx|ktp|auto)") { continue }
-                    $txt = $parts[9]
-                    $techRegex = "(?i)(?:circle|square|box|rectangle|line|triangle|oval|star|polygon|cm|mm|width|height|depth|circ|vert|horiz)"
-                    if ($txt -match "(?i)^[mb]\s-?\d+" -or $txt -match $techRegex) { continue }
-                    $readable = $txt -replace '\{.*?\}', '' -replace '\\[Nnh]', ' '
-                    $trimmed = $readable.Trim()
-                    if ($history.Contains($trimmed) -or -not ($trimmed -match "\p{L}[,.?!]")) { continue }
-                    [void]$sb.AppendLine($trimmed); $history.Add($trimmed)
-                    if ($history.Count -gt 10) { $history.RemoveAt(0) }
-                }
+            if (-not $line.StartsWith("Dialogue:")) { continue }
+            if ($script:RegexDrawCheck.IsMatch($line)) { continue }
+            
+            $parts = $line.Split(',', 10)
+            if ($parts.Length -eq 10) {
+                if ($script:RegexSyncCheck.IsMatch($parts[8])) { continue }
+                $txt = $parts[9]
+                if ($script:RegexCoordinateDraw.IsMatch($txt) -or $script:RegexTechCheck.IsMatch($txt)) { continue }
+                
+                $readable = $script:RegexCleanBrackets.Replace($txt, '')
+                $readable = $script:RegexCleanSlashN.Replace($readable, ' ')
+                $trimmed = $readable.Trim()
+                if ($history.Contains($trimmed) -or -not $script:RegexLetterMatch.IsMatch($trimmed)) { continue }
+                [void]$sb.AppendLine($trimmed); $history.Add($trimmed)
+                if ($history.Count -gt 10) { $history.RemoveAt(0) }
+                if ($sb.Length -ge $MaxLength) { break }
             }
         } else {
-            if ($line -match "-->" -or $line -match "^\d+$" -or [string]::IsNullOrWhiteSpace($line)) { continue }
-            $readable = $line -replace '<.*?>', '' -replace '\{.*?\}', ''
+            if ([string]::IsNullOrWhiteSpace($line) -or $line.Contains("-->")) { continue }
+            
+            # Fast numeric check to skip subtitle index lines without regex
+            $isNumeric = $true
+            for ($i = 0; $i -lt $line.Length; $i++) {
+                if (-not [char]::IsDigit($line[$i])) { $isNumeric = $false; break }
+            }
+            if ($isNumeric) { continue }
+            
+            $readable = $script:RegexCleanHTML.Replace($line, '')
+            $readable = $script:RegexCleanBrackets.Replace($readable, '')
             $trimmed = $readable.Trim()
-            if ($history.Contains($trimmed) -or -not ($trimmed -match "\p{L}[,.?!]")) { continue }
+            if ($history.Contains($trimmed) -or -not $script:RegexLetterMatch.IsMatch($trimmed)) { continue }
             [void]$sb.AppendLine($trimmed); $history.Add($trimmed)
             if ($history.Count -gt 10) { $history.RemoveAt(0) }
+            if ($sb.Length -ge $MaxLength) { break }
         }
     }
     $finalText = $sb.ToString()
@@ -2442,7 +2478,13 @@ foreach ($folderPath in $targetFolders) {
                                                 $isImageSub = ($sub.codec -match "PGS|VobSub")
                                                 
                                                 if (-not $isImageSub) {
-                                                    $cleanText = Extract-DialogueText -Path $probeFile -OutPath (Join-Path $tempDir "track$($sub.id + 1)_cleaned.txt") -DevDebug:$DevDebug
+                                                    $maxNeeded = [int]::MaxValue
+                                                        if ($ambiguousTracks.Count -eq 1) {
+                                                            $maxNeeded = if ($DeepSubtitleAuditNOLanguageDetection) { 1500 } else { 15000 }
+                                                        } elseif ($ambiguousTracks.Count -gt 2) {
+                                                            $maxNeeded = 15000
+                                                        }
+                                                        $cleanText = Extract-DialogueText -Path $probeFile -OutPath (Join-Path $tempDir "track$($sub.id + 1)_cleaned.txt") -DevDebug:$DevDebug -MaxLength $maxNeeded
                                                     
                                                     # Language Detection
                                                     if (-not $DeepSubtitleAuditNOLanguageDetection) {
@@ -2451,7 +2493,8 @@ foreach ($folderPath in $targetFolders) {
                                                         $subIdx = [array]::IndexOf($allSubs, $sub) + 1
                                                         $tmpSel = "s$subIdx"
 
-                                                        $detected = Detect-SubtitleLanguage -Text $cleanText `
+                                                        $sampleText = if ($cleanText.Length -gt 15000) { $cleanText.Substring(0, 15000) } else { $cleanText }
+                                                        $detected = Detect-SubtitleLanguage -Text $sampleText `
                                                                                             -CurrentLang $sub.properties.language `
                                                                                             -Honorifics:$Honorifics `
                                                                                             -DevDebug:$DevDebug `
