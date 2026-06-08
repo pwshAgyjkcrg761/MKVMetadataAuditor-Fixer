@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: MKVMetadataAuditor+Fixer.ps1
-# VERSION: 2026.06.06__23.40.00
+# VERSION: 2026.06.08__07.05.00
 # TARGET: PowerShell 7.6.2 LTS
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -128,7 +128,7 @@ if ($FixNoBackup) { $Fix = $true }
 if ($DeepSubtitleAuditDebugExtraction -or $DeepSubtitleAuditLanguageDetectionLimit2 -or $DeepSubtitleAuditNOLanguageDetection) { $DeepSubtitleAudit = $true }
 
 # --- GLOBAL VERSION DEFINITION ---
-$scriptVersion = "2026.06.06__23.40.00"
+$scriptVersion = "2026.06.08__07.05.00"
 
 # --- VERSION REPORTER ---
 if ($Version) {
@@ -2678,7 +2678,6 @@ foreach ($folderPath in $targetFolders) {
                                                     if ($newNameL -ne $nameL) {
                                                         $needsChange = $true
                                                         if ($Fix) {
-                                                            $Params += @('--edit', "track:$($largeTrack.id + 1)", '--set', "name=$newNameL")
                                                             $largeTrack.properties | Add-Member -NotePropertyName "track_name" -NotePropertyValue $newNameL -Force
                                                         }
                                                     }
@@ -2692,7 +2691,6 @@ foreach ($folderPath in $targetFolders) {
                                                     if ($newNameS -ne $nameS) {
                                                         $needsChange = $true
                                                         if ($Fix) {
-                                                            $Params += @('--edit', "track:$($smallTrack.id + 1)", '--set', "name=$newNameS")
                                                             $smallTrack.properties | Add-Member -NotePropertyName "track_name" -NotePropertyValue $newNameS -Force
                                                         }
                                                     }
