@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: MKVMetadataAuditor+Fixer.ps1
-# VERSION: 2026.06.08__10.08.56
+# VERSION: 2026.06.08__11.55.00
 # TARGET: PowerShell 7.6.2 LTS
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -128,7 +128,7 @@ if ($FixNoBackup) { $Fix = $true }
 if ($DeepSubtitleAuditDebugExtraction -or $DeepSubtitleAuditLanguageDetectionLimit2 -or $DeepSubtitleAuditNOLanguageDetection) { $DeepSubtitleAudit = $true }
 
 # --- GLOBAL VERSION DEFINITION ---
-$scriptVersion = "2026.06.08__10.08.56"
+$scriptVersion = "2026.06.08__11.55.00"
 
 # --- VERSION REPORTER ---
 if ($Version) {
@@ -2470,6 +2470,10 @@ foreach ($folderPath in $targetFolders) {
                                                         # [FIX] Convergence: Only fix header if not equivalent (prevents eng <-> enm loops)
                                                         if (-not $isEngEnmEquivalent -and $sub.properties.language -ne $detected -and $detected -ne "und") {
                                                             if ($DevDebug) { Write-Host "  [DevDebug-DSA] Lng Fix: Track $($sub.id + 1) ($($sub.properties.language) -> $detected)" -ForegroundColor Yellow }
+                                                            # FORCE WRITE: Add to Params immediately to ensure disk update
+                                                            if ($Fix) { $Params += @('--edit', "track:$($sub.id + 1)", '--set', "language=$detected") }
+                                                            $needsChange = $true
+                                                            $sub.properties.language = $detected
                                                         }
                                                     }
                                                     $dsaCtx.Weights[$sub.id] = $cleanText.Length
@@ -2529,6 +2533,7 @@ foreach ($folderPath in $targetFolders) {
                                 
                                 # Aggressive Role Sanitization Filter
                                 $roleFilter = "(?i)\b(full|dialogue|dialog|honorifics?|honor|signs|songs|english|eng|subs|subtitles|main|lyrics|translated|translation)\b"
+                                $SanitizeName = { param($n) ($n -replace $roleFilter, ' ' -replace '[\(\)\[\]\{\}\-\.\:\&\+]', ' ').Trim() -replace '\s+', ' ' }
 
                                 # Phase A: Universal Honorifics & Language Normalization (ALL tracks)
                                 foreach ($tH in $ambiguousTracks) {
@@ -2544,7 +2549,7 @@ foreach ($folderPath in $targetFolders) {
 
                                         # 2. Smart Naming: Standardize via Sanitization
                                         # First, extract group by stripping role keywords
-                                        $cleanGroupName = ($curName -replace '[\(\)\[\]\{\}\-\.\:]', ' ' -replace $roleFilter, ' ').Trim() -replace '\s+', ' '
+                                        $cleanGroupName = &$SanitizeName $curName
                                         $newName = if ([string]::IsNullOrWhiteSpace($cleanGroupName)) { "Honorifics Full Dialogue" } else { "Honorifics Full Dialogue [$cleanGroupName]" }
                                         
                                         # Final Comparison: Only update if standardized name differs from current name
@@ -2591,16 +2596,15 @@ foreach ($folderPath in $targetFolders) {
                                         if ($t1.properties.DSA_Handled -or $isCorrect) { 
                                             $actionMsg = "[DSA] SINGLE-VERIFIED: Track role is already correct."
                                         } else {
-                                            $groupName = ($currentName -replace '[\(\)\[\]\{\}\-\.\:]', ' ' -replace $roleFilter, ' ').Trim() -replace '\s+', ' '
+                                            $groupName = &$SanitizeName $currentName
                                             $role = if ($isHonLocal) { "Honorifics Full Dialogue" } else { "Full Dialogue" }
                                             $newName = if ([string]::IsNullOrWhiteSpace($groupName)) { $role } else { "$role [$groupName]" }
 
                                             if ($newName -ne $currentName) {
                                                 $needsChange = $true
-                                                if ($Fix) {
-                                                    $Params += @('--edit', "track:$($t1.id + 1)", '--set', "name=$newName")
-                                                    $t1.properties | Add-Member -NotePropertyName "track_name" -NotePropertyValue $newName -Force
-                                                }
+                                                if ($Fix) { $Params += @('--edit', "track:$($t1.id + 1)", '--set', "name=$newName") }
+                                                $t1.properties | Add-Member -NotePropertyName "track_name" -NotePropertyValue $newName -Force
+                                                $t1.properties | Add-Member -NotePropertyName "DSA_Handled" -NotePropertyValue $true -Force
                                                 $actionMsg = "[DSA] SINGLE-FIX: Validated Dialogue Track (Renamed: '$newName')"
                                             }
                                         }
@@ -2656,16 +2660,26 @@ foreach ($folderPath in $targetFolders) {
                                             # [Condition 3.1] SWAP REQUIRED
                                             if (($nameL -match $script:RegexSign) -and ($nameS -match $script:RegexDiag)) {
                                                 $needsChange = $true
-                                                $largeTrack.properties | Add-Member -MemberType NoteProperty -Name "DSA_Handled" -NotePropertyValue $true -Force
-                                                $smallTrack.properties | Add-Member -MemberType NoteProperty -Name "DSA_Handled" -NotePropertyValue $true -Force
+                                                $largeTrack.properties | Add-Member -NotePropertyName "DSA_Handled" -NotePropertyValue $true -Force
+                                                $smallTrack.properties | Add-Member -NotePropertyName "DSA_Handled" -NotePropertyValue $true -Force
+
+                                                # Standardize Names during swap
+                                                $groupL = &$SanitizeName $nameS
+                                                $groupS = &$SanitizeName $nameL
+                                                
+                                                $isHonL = ($largeTrack.DSA_DetectedLang -eq "enm" -or $largeTrack.properties.language -eq "enm" -or $nameS -match "Honorifics")
+                                                $roleL = if ($isHonL) { "Honorifics Full Dialogue" } else { "Full Dialogue" }
+                                                
+                                                $nameS = if ([string]::IsNullOrWhiteSpace($roleL)) { "Full Dialogue" } else { if ([string]::IsNullOrWhiteSpace($groupL)) { $roleL } else { "$roleL [$groupL]" } }
+                                                $nameL = if ([string]::IsNullOrWhiteSpace($groupS)) { "Signs & Songs" } else { "Signs & Songs [$groupS]" }
                                                 if ($Fix) {
                                                     if ($nameS -ne $nameL) {
                                                         $Params += @('--edit', "track:$($largeTrack.id + 1)", '--set', "name=$nameS")
                                                         $Params += @('--edit', "track:$($smallTrack.id + 1)", '--set', "name=$nameL")
                                                     }
-                                                    $largeTrack.properties | Add-Member -NotePropertyName "track_name" -NotePropertyValue $nameS -Force
-                                                    $smallTrack.properties | Add-Member -NotePropertyName "track_name" -NotePropertyValue $nameL -Force
                                                 }
+                                                $largeTrack.properties | Add-Member -NotePropertyName "track_name" -NotePropertyValue $nameS -Force
+                                                $smallTrack.properties | Add-Member -NotePropertyName "track_name" -NotePropertyValue $nameL -Force
                                                 $actionMsg = "[DSA] SWAP: Swapping '$nameS' to Large and '$nameL' to Small"
                                             }
                                             # [Condition 3.2] FIX GARBAGE/MISSING/HONORIFICS
@@ -2677,7 +2691,7 @@ foreach ($folderPath in $targetFolders) {
                                                               else { $nameL -match "Full Dialogue" -and $nameL -notmatch "Honorifics" }
 
                                                 if (-not $handledL -and -not $isCorrectL) {
-                                                    $groupL = ($nameL -replace '[\(\)\[\]\{\}\-\.\:]', ' ' -replace $roleFilter, ' ').Trim() -replace '\s+', ' '
+                                                    $groupL = &$SanitizeName $nameL
                                                     $roleL = if ($isHonL) { "Honorifics Full Dialogue" } else { "Full Dialogue" }
                                                     $newNameL = if ([string]::IsNullOrWhiteSpace($groupL)) { $roleL } else { "$roleL [$groupL]" }
                                                     
@@ -2691,7 +2705,7 @@ foreach ($folderPath in $targetFolders) {
 
                                                 # Signs Track (Small)
                                                 if (-not $handledS -and $nameS -notmatch "Signs & Songs") {
-                                                    $groupS = ($nameS -replace '[\(\)\[\]\{\}\-\.\:]', ' ' -replace $roleFilter, ' ').Trim() -replace '\s+', ' '
+                                                    $groupS = &$SanitizeName $nameS
                                                     $newNameS = if ([string]::IsNullOrWhiteSpace($groupS)) { "Signs & Songs" } else { "Signs & Songs [$groupS]" }
 
                                                     if ($newNameS -ne $nameS) {
@@ -2707,9 +2721,11 @@ foreach ($folderPath in $targetFolders) {
                                                 if ($Fix) {
                                                     if ($newNameL -ne $nameL) { $Params += @('--edit', "track:$($largeTrack.id + 1)", '--set', "name=$newNameL") }
                                                     if ($newNameS -ne $nameS) { $Params += @('--edit', "track:$($smallTrack.id + 1)", '--set', "name=$newNameS") }
-                                                    $largeTrack.properties | Add-Member -NotePropertyName "track_name" -NotePropertyValue $newNameL -Force
-                                                    $smallTrack.properties | Add-Member -NotePropertyName "track_name" -NotePropertyValue $newNameS -Force
                                                 }
+                                                $largeTrack.properties | Add-Member -NotePropertyName "track_name" -NotePropertyValue $newNameL -Force
+                                                $smallTrack.properties | Add-Member -NotePropertyName "track_name" -NotePropertyValue $newNameS -Force
+                                                $largeTrack.properties | Add-Member -NotePropertyName "DSA_Handled" -NotePropertyValue $true -Force
+                                                $smallTrack.properties | Add-Member -NotePropertyName "DSA_Handled" -NotePropertyValue $true -Force
                                                 $actionMsg = "[DSA] FIX: Corrected Garbage/Missing names (Large: '$newNameL', Small: '$newNameS')"
                                             }
                                             else {
