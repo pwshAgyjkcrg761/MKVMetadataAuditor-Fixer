@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: MKVMetadataAuditor+Fixer.ps1
-# VERSION: 2026.06.06__16.16.00
+# VERSION: 2026.06.06__23.40.00
 # TARGET: PowerShell 7.6.2 LTS
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -19,19 +19,22 @@
 #      recent user prompt or link (Ref: https://www.timeanddate.com/worldclock/usa/chicago).
 #    - STAMP ACCURACY: Ensure the minutes match the current Chicago clock exactly.
 # 2. DO NOT modify or refactor any code inside <PROTECTED> tags.
-# 3. SCRIPT OUTPUT:
+# 3. SCRIPT OUTPUT (SURGICAL FIXES ONLY):
+#    - Provide minimal, highly targeted, surgical edits. Do not rewrite large blocks or entire functions unless explicitly requested.
 #    - When printing the script, only print snippets unless asked for the entire script.
 #    - Always use a codebox with a copy button.
 #    - If there are multiple modifications, present them strictly ONE step at a time,
 #      and wait for user confirmation before proceeding to the next step.
+#
 # 4. VERBATIM ANCHOR PROTOCOL:
 #    - To facilitate "Find" in Notepad++ always structure edits with:
-#      - "Verbatim Anchor (Before)" - The exact lines of existing code immediately before the change.
-#      - "Verbatim Anchor (After)" - The exact lines of existing code immediately after the change.
-#      - "Snippet to REPLACE" - The exact code block to be deleted.
-#      - "What to PASTE in its place" - The new code block to be inserted.
-#    - Do not summarize, truncate, or refactor the existing code used as an anchor.
-#    - Copy spaces, comments, and symbols exactly as they appear in the file.
+#     - "Verbatim Anchor (Before)" - The exact lines of existing code immediately before the change.
+#     - "Verbatim Anchor (After)" - The exact lines of existing code immediately after the change.
+#     - "Snippet to REPLACE" - The exact code block to be deleted.
+#     - "What to PASTE in its place" - The new code block to be inserted.
+#   - Do not summarize, truncate, or refactor the existing code used as an anchor.
+#   - Copy spaces, comments, and symbols exactly as they appear in the file.
+#   - Keep anchors and replacement snippets as small and precise as possible to isolate only the necessary change.
 # ==============================================================================
 # </PROTECTED>
 
@@ -125,7 +128,7 @@ if ($FixNoBackup) { $Fix = $true }
 if ($DeepSubtitleAuditDebugExtraction -or $DeepSubtitleAuditLanguageDetectionLimit2 -or $DeepSubtitleAuditNOLanguageDetection) { $DeepSubtitleAudit = $true }
 
 # --- GLOBAL VERSION DEFINITION ---
-$scriptVersion = "2026.06.06__16.16.00"
+$scriptVersion = "2026.06.06__23.40.00"
 
 # --- VERSION REPORTER ---
 if ($Version) {
@@ -697,7 +700,9 @@ function Get-TrackScore {
     $isPrefLang = ($trackLang -eq $fixerConfig.Subtitles.PreferredLanguage)
     $honRegex = "(?<!no\s|non-|without\s|removed\s|no-)(honorific|honor)"
     $dsaDetected = $t.DSA_DetectedLang
-    $isHonorificsTrack = ($trackLang -eq "enm") -or ($trackName -match $honRegex) -or ($null -ne $dsaDetected)
+    # [MOD] Prioritize Detection over Header: Since headers are normalized to 'eng', 
+    # we rely on DSA's 'enm' detection or honorific name keywords to trigger the bonus.
+    $isHonorificsTrack = ($trackLang -eq "enm") -or ($dsaDetected -eq "enm") -or ($trackName -match $honRegex)
     
     if (-not $isPrefLang -and $Honorifics -and $fixerConfig.Subtitles.PreferredLanguage -eq "eng" -and $isHonorificsTrack) {
         $isPrefLang = $true
@@ -2327,10 +2332,14 @@ foreach ($folderPath in $targetFolders) {
                                     Write-Host "  [DevDebug-DSA] Scanning file: $($fToFix.Name) (Total Subs: $($allSubs.Count))" -ForegroundColor Gray
                                 }
 
-                                # Safety Gate for -LDL2 (Limit processing to 1 or 2 tracks)
-                                $isLdl2Restricted = ($DeepSubtitleAuditLanguageDetectionLimit2 -and $allSubs.Count -gt 2)
-
-                                if ($allSubs.Count -ge 1 -and -not $isLdl2Restricted) {
+                                # [MOD] Discovery Gate: If -LDL2 is active, skip files with > 2 tracks entirely.
+                                # Otherwise, allow probes for Honorifics on all tracks.
+                                if ($allSubs.Count -ge 1) {
+                                    if ($DeepSubtitleAuditLanguageDetectionLimit2 -and $allSubs.Count -gt 2) {
+                                        if ($DevDebug) { Write-Host "  [DevDebug-DSA] Skipping: File has $($allSubs.Count) tracks (-LDL2 active)" -ForegroundColor DarkGray }
+                                        $currentGroup | Add-Member -MemberType NoteProperty -Name $fileGuid -Value $null -Force
+                                        continue 
+                                    }
                                     if ($DevDebug) { Write-Host "  [DevDebug-DSA] Discovery: File accepted for Language Probe (Count: $($allSubs.Count))" -ForegroundColor Cyan }
 
                                     # [TRUTH CAPTURE] Take the snapshot BEFORE language detection runs
@@ -2448,8 +2457,10 @@ foreach ($folderPath in $targetFolders) {
                                                                                             -Selector $tmpSel `
                                                                                             -TrackName $sub.properties.track_name
 
-                                                        $isAlreadyHon = ($sub.properties.language -eq "enm" -and $detected -eq "eng")
-                                                        if (-not $isAlreadyHon -and $sub.properties.language -ne $detected -and $detected -ne "und") {
+                                                        # [FIX] Oscillation Prevention: Treat 'eng' and 'enm' as equivalent matches.
+                                                        $isEngEnmEquivalent = ($sub.properties.language -match "eng|enm" -and $detected -match "eng|enm")
+                                                        # [FIX] Convergence: Treat 'eng' and 'enm' as equivalent.
+                                                        if (-not $isEngEnmEquivalent -and $sub.properties.language -ne $detected -and $detected -ne "und") {
                                                             if ($DevDebug) { Write-Host "  [DevDebug-DSA] Lng Fix: Track $($sub.id + 1) ($($sub.properties.language) -> $detected)" -ForegroundColor Yellow }
                                                             $sub | Add-Member -NotePropertyName "DSA_DetectedLang" -NotePropertyValue $detected -Force
                                                         }
@@ -2508,16 +2519,54 @@ foreach ($folderPath in $targetFolders) {
                                 }
                                 
                                 # --- STAGE 3: DECISION LOGIC (SINGLE TRACK VALIDATION) ---
+                                
+                                # Aggressive Role Sanitization Filter
+                                $roleFilter = "(?i)\b(full|dialogue|dialog|honorifics?|honor|signs|songs|english|eng|subs|subtitles|main|lyrics|translated|translation)\b"
+
+                                # Phase A: Universal Honorifics & Language Normalization (ALL tracks)
+                                foreach ($tH in $ambiguousTracks) {
+                                    $isHonDet = ($tH.DSA_DetectedLang -eq "enm" -or $tH.properties.language -eq "enm" -or $tH.properties.track_name -match "(?i)honorific|honor")
+                                    if ($isHonDet) {
+                                        $curName = if ($tH.properties.track_name) { $tH.properties.track_name } else { "" }
+                                        
+                                        # 1. Language Normalization: Force header to 'eng'
+                                        if ($tH.properties.language -ne "eng") {
+                                            $needsChange = $true
+                                            if ($Fix) { $Params += @('--edit', "track:$($tH.id + 1)", '--set', "language=eng") }
+                                        }
+
+                                        # 2. Smart Naming: Convergence Check
+                                        if ($curName -match "Honorifics" -and $curName -match "Full Dialogue") {
+                                            $tH.properties | Add-Member -NotePropertyName "DSA_Handled" -NotePropertyValue $true -Force
+                                            continue 
+                                        }
+
+                                        # Sanitization: Symbols first, then Role Keywords
+                                        $cleanGroupName = ($curName -replace '[\(\)\[\]\{\}\-\.\:]', ' ' -replace $roleFilter, ' ').Trim() -replace '\s+', ' '
+                                        $newName = if ([string]::IsNullOrWhiteSpace($cleanGroupName)) { "Honorifics Full Dialogue" } else { "Honorifics Full Dialogue [$cleanGroupName]" }
+                                        
+                                        if ($newName -ne $curName) {
+                                            $needsChange = $true
+                                            if ($Fix) {
+                                                $Params += @('--edit', "track:$($tH.id + 1)", '--set', "name=$newName")
+                                                $tH.properties | Add-Member -NotePropertyName "track_name" -NotePropertyValue $newName -Force
+                                            }
+                                            [void]$fixDetails.Add("  [DSA] UNIVERSAL-HONORIFIC: Tagged track $($tH.id + 1) as Honorifics.")
+                                        }
+                                        $tH.properties | Add-Member -NotePropertyName "DSA_Handled" -NotePropertyValue $true -Force
+                                    }
+                                }
+
+                                # Phase B: Restricted Role Tagging (1 or 2 tracks ONLY)
+                                # Skip role guessing if LDL2 restriction is active or tracks handled in Phase A.
                                 if ($ambiguousTracks.Count -eq 1) {
                                     $t1 = $ambiguousTracks[0]
                                     $w1 = $dsaCtx.Weights[$t1.id]
                                     $isText = $t1.codec -match "s_text|utf8|srt|ass|ssa|substationalpha|subrip"
                                     
-                                    # Thresholds: Text (1500 chars) | Image (2.0 MB)
+                                    # Thresholds: Text (1500 chars) | Image (0.5 MB)
                                     $minThreshold = if ($isText) { 1500 } else { 524288 }
                                     $passedDensity = ($w1 -ge $minThreshold)
-                                    
-                                    $isHonDet = ($t1.DSA_DetectedLang -eq "enm" -or $t1.properties.language -eq "enm")
                                     $currentName = if ($t1.properties.track_name) { $t1.properties.track_name } else { "" }
                                     $actionMsg = ""
 
@@ -2529,35 +2578,28 @@ foreach ($folderPath in $targetFolders) {
                                     }
 
                                     if ($passedDensity) {
-                                        # DIALOGUE PASSED: Name and Language update
-                                        # Smart Sanitization: Strip generic words to find the group name
-                                        $genericFilter = "(?i)\b(eng(lish)?|subs?(titles)?|full|dialog(ue)?|main|signs?|songs?|lyrics?|translated|translation)\b|[\[\]\(\)\-\.\:]"
-                                        $groupName = ($currentName -replace $genericFilter, ' ').Trim() -replace '\s+', ' '
-                                        
-                                        $role = "Full Dialogue"
-                                        if ($isHonDet) { $role += " Honorifics" }
-                                        
-                                        $newName = if ([string]::IsNullOrWhiteSpace($groupName)) { $role } else { "$role [$groupName]" }
+                                        $isHonLocal = ($t1.DSA_DetectedLang -eq "enm" -or $t1.properties.language -eq "enm" -or $currentName -match "Honorifics")
+                                        $isCorrect = if ($isHonLocal) { $currentName -match "Honorifics" -and $currentName -match "Full Dialogue" }
+                                                     else { $currentName -match "Full Dialogue" -and $currentName -notmatch "Honorifics" }
 
-                                        if ($newName -ne $currentName) {
-                                            $needsChange = $true
-                                            if ($Fix) {
-                                                $Params += @('--edit', "track:$($t1.id + 1)", '--set', "name=$newName")
-                                                $t1.properties | Add-Member -NotePropertyName "track_name" -NotePropertyValue $newName -Force
-                                            }
-                                            $actionMsg = "[DSA] SINGLE-FIX: Validated Dialogue Track (Renamed: '$newName')"
+                                        if ($t1.properties.DSA_Handled -or $isCorrect) { 
+                                            $actionMsg = "[DSA] SINGLE-VERIFIED: Track role is already correct."
                                         } else {
-                                            $actionMsg = "[DSA] SINGLE-VERIFIED: Single Dialogue track name is correct."
+                                            $groupName = ($currentName -replace '[\(\)\[\]\{\}\-\.\:]', ' ' -replace $roleFilter, ' ').Trim() -replace '\s+', ' '
+                                            $role = if ($isHonLocal) { "Honorifics Full Dialogue" } else { "Full Dialogue" }
+                                            $newName = if ([string]::IsNullOrWhiteSpace($groupName)) { $role } else { "$role [$groupName]" }
+
+                                            if ($newName -ne $currentName) {
+                                                $needsChange = $true
+                                                if ($Fix) {
+                                                    $Params += @('--edit', "track:$($t1.id + 1)", '--set', "name=$newName")
+                                                    $t1.properties | Add-Member -NotePropertyName "track_name" -NotePropertyValue $newName -Force
+                                                }
+                                                $actionMsg = "[DSA] SINGLE-FIX: Validated Dialogue Track (Renamed: '$newName')"
+                                            }
                                         }
                                     } else {
-                                        # DENSITY FAILED: Update language only if needed, do NOT rename
                                         $actionMsg = "[DSA] SINGLE-SKIP: Track failed density check (Likely Signs & Songs). Naming bypassed."
-                                    }
-
-                                    # Language check applies to both Pass/Fail if detection found enm
-                                    if ($isHonDet -and $t1.properties.language -ne "enm") {
-                                        $needsChange = $true # Trigger Fix to ensure language tag updates
-                                        $actionMsg += " + Lng Update (enm)"
                                     }
 
                                     if ($DevDebug) { Write-Host "  $($actionMsg -replace '^\[DSA\]', '[DevDebug-DSA]')" -ForegroundColor Cyan }
@@ -2587,8 +2629,15 @@ foreach ($folderPath in $targetFolders) {
                                         $isDualEng = ($effL0 -match "eng|enm" -and $effL1 -match "eng|enm")
                                         
                                         if ($ratio -ge $dynRatio -and $isDualEng) {
-                                            $hasDiagL = $nameL -match $script:RegexDiag
-                                            $hasSignL = $nameL -match $script:RegexSign
+                                            # Aggressive Role Filtering
+                                            $roleFilter = "(?i)\b(full|dialogue|dialog|honorifics|honor|signs|songs|english|eng|subs|subtitles|main|lyrics|translated|translation)\b"
+
+                                            # Check handled status (Phase A)
+                                            $handledL = $largeTrack.properties.DSA_Handled
+                                            $handledS = $smallTrack.properties.DSA_Handled
+
+                                            $hasDiagL = ($nameL -match $script:RegexDiag) -or $handledL
+                                            $hasSignL = ($nameL -match $script:RegexSign)
                                             $hasDiagS = $nameS -match $script:RegexDiag
                                             $hasSignS = $nameS -match $script:RegexSign
                                             
@@ -2615,22 +2664,39 @@ foreach ($folderPath in $targetFolders) {
                                             }
                                             # [Condition 3.2] FIX GARBAGE/MISSING/HONORIFICS
                                             elseif (-not $hasDiagL -or -not $hasSignS -or ($nameL -match "English Subtitles") -or $isNameMissingHon) {
-                                                $needsChange = $true
-                                                $largeTrack.properties | Add-Member -NotePropertyName "DSA_Handled" -NotePropertyValue $true -Force
-                                                $smallTrack.properties | Add-Member -NotePropertyName "DSA_Handled" -NotePropertyValue $true -Force
                                                 
-                                                # Smart Sanitization Logic
-                                                $genericFilter = "(?i)\b(eng(lish)?|subs?(titles)?|full|dialog(ue)?|main|signs?|songs?|lyrics?|translated|translation)\b|[\[\]\(\)\-\.\:]"
-                                                
-                                                # Process Large Track (Dialogue)
-                                                $groupL = ($nameL -replace $genericFilter, ' ').Trim() -replace '\s+', ' '
-                                                $roleL = "Full Dialogue"
-                                                if ($largeTrack.DSA_DetectedLang -eq "enm" -or $largeTrack.properties.language -eq "enm") { $roleL += " Honorifics" }
-                                                $newNameL = if ([string]::IsNullOrWhiteSpace($groupL)) { $roleL } else { "$roleL [$groupL]" }
+                                                # Dialogue Track (Large)
+                                                $isHonL = ($largeTrack.DSA_DetectedLang -eq "enm" -or $largeTrack.properties.language -eq "enm" -or $nameL -match "Honorifics")
+                                                $isCorrectL = if ($isHonL) { $nameL -match "Honorifics" -and $nameL -match "Full Dialogue" }
+                                                              else { $nameL -match "Full Dialogue" -and $nameL -notmatch "Honorifics" }
 
-                                                # Process Small Track (Signs)
-                                                $groupS = ($nameS -replace $genericFilter, ' ').Trim() -replace '\s+', ' '
-                                                $newNameS = if ([string]::IsNullOrWhiteSpace($groupS)) { "Signs & Songs" } else { "Signs & Songs [$groupS]" }
+                                                if (-not $handledL -and -not $isCorrectL) {
+                                                    $groupL = ($nameL -replace '[\(\)\[\]\{\}\-\.\:]', ' ' -replace $roleFilter, ' ').Trim() -replace '\s+', ' '
+                                                    $roleL = if ($isHonL) { "Honorifics Full Dialogue" } else { "Full Dialogue" }
+                                                    $newNameL = if ([string]::IsNullOrWhiteSpace($groupL)) { $roleL } else { "$roleL [$groupL]" }
+                                                    
+                                                    if ($newNameL -ne $nameL) {
+                                                        $needsChange = $true
+                                                        if ($Fix) {
+                                                            $Params += @('--edit', "track:$($largeTrack.id + 1)", '--set', "name=$newNameL")
+                                                            $largeTrack.properties | Add-Member -NotePropertyName "track_name" -NotePropertyValue $newNameL -Force
+                                                        }
+                                                    }
+                                                } else { $newNameL = $nameL }
+
+                                                # Signs Track (Small)
+                                                if (-not $handledS -and $nameS -notmatch "Signs & Songs") {
+                                                    $groupS = ($nameS -replace '[\(\)\[\]\{\}\-\.\:]', ' ' -replace $roleFilter, ' ').Trim() -replace '\s+', ' '
+                                                    $newNameS = if ([string]::IsNullOrWhiteSpace($groupS)) { "Signs & Songs" } else { "Signs & Songs [$groupS]" }
+
+                                                    if ($newNameS -ne $nameS) {
+                                                        $needsChange = $true
+                                                        if ($Fix) {
+                                                            $Params += @('--edit', "track:$($smallTrack.id + 1)", '--set', "name=$newNameS")
+                                                            $smallTrack.properties | Add-Member -NotePropertyName "track_name" -NotePropertyValue $newNameS -Force
+                                                        }
+                                                    }
+                                                } else { $newNameS = $nameS }
                                                 
                                                 if ($newNameL -eq $newNameS) { $newNameL = "Full Dialogue"; $newNameS = "Signs & Songs" }
 
@@ -2784,12 +2850,13 @@ foreach ($folderPath in $targetFolders) {
                     # Pull the DSA recommendation directly from the track object
                     $dsaDetected = ($fToFix.PristineJson.tracks | Where-Object { $_.id -eq $winner.ID }).DSA_DetectedLang
                     
-                    # [FIX] Truth-First: Use detected language if it differs from the header
+                    # [FIX] Normalization Sync: Standardize 'enm' to 'eng' for the header language.
                     $isWinnerHon = ($winner.Name -match $honRegex) -or ($winner.Lang -eq "enm") -or ($dsaDetected -eq "enm")
                     
-                    $correctLangForWinner = if ($dsaDetected -and $dsaDetected -ne "und") { $dsaDetected } 
-                                            elseif ($Honorifics -and $isWinnerHon) { "enm" } 
-                                            elseif ($winner.Lang -eq "enm") { "enm" } 
+                    $correctLangForWinner = if ($dsaDetected -eq "enm") { "eng" }
+                                            elseif ($dsaDetected -and $dsaDetected -ne "und") { $dsaDetected } 
+                                            elseif ($Honorifics -and $isWinnerHon) { "eng" } 
+                                            elseif ($winner.Lang -eq "enm") { "eng" } 
                                             else { $targetSubLang }
                     
                     # [FIX] Determine Effective Language for Validity Check (DSA Detected vs Header)
@@ -2851,6 +2918,9 @@ foreach ($folderPath in $targetFolders) {
                                 
                                 # [FIX] Truth-First: Force update header if detected language doesn't match
                                 $detected = $lostTrack.DSA_DetectedLang
+                                # Normalization: Ensure enm detected losers are also standardized to eng headers
+                                if ($detected -eq "enm") { $detected = "eng" }
+
                                 if ($detected -and $detected -ne "und" -and $lostTrack.properties.language -ne $detected) {
                                     $Params += @('--set', "language=$detected")
                                     $needsChange = $true
