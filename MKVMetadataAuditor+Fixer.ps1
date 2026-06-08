@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: MKVMetadataAuditor+Fixer.ps1
-# VERSION: 2026.06.08__11.55.00
+# VERSION: 2026.06.08__13.12.00
 # TARGET: PowerShell 7.6.2 LTS
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -128,7 +128,7 @@ if ($FixNoBackup) { $Fix = $true }
 if ($DeepSubtitleAuditDebugExtraction -or $DeepSubtitleAuditLanguageDetectionLimit2 -or $DeepSubtitleAuditNOLanguageDetection) { $DeepSubtitleAudit = $true }
 
 # --- GLOBAL VERSION DEFINITION ---
-$scriptVersion = "2026.06.08__11.55.00"
+$scriptVersion = "2026.06.08__13.12.00"
 
 # --- VERSION REPORTER ---
 if ($Version) {
@@ -426,7 +426,7 @@ function Detect-SubtitleLanguage {
 
         if ($isEnglish) {
             if ($Honorifics -and $honMatches -ge 1) { 
-                if ($DevDebug) { Write-Host "      -> MATCH: English (Japanese Honorifics) [enm]" -ForegroundColor Green }
+                if ($DevDebug) { Write-Host "      -> MATCH: English (Japanese Honorifics) [enm] (Header: eng)" -ForegroundColor Green }
                 return "enm" 
             }
             if ($DevDebug) { Write-Host "      -> MATCH: English [eng]" -ForegroundColor Green }
@@ -2469,9 +2469,10 @@ foreach ($folderPath in $targetFolders) {
 
                                                         # [FIX] Convergence: Only fix header if not equivalent (prevents eng <-> enm loops)
                                                         if (-not $isEngEnmEquivalent -and $sub.properties.language -ne $detected -and $detected -ne "und") {
-                                                            if ($DevDebug) { Write-Host "  [DevDebug-DSA] Lng Fix: Track $($sub.id + 1) ($($sub.properties.language) -> $detected)" -ForegroundColor Yellow }
+                                                            $writeLang = if ($detected -eq "enm") { "eng" } else { $detected }
+                                                            if ($DevDebug) { Write-Host "  [DevDebug-DSA] Lng Fix: Track $($sub.id + 1) ($($sub.properties.language) -> $writeLang)" -ForegroundColor Yellow }
                                                             # FORCE WRITE: Add to Params immediately to ensure disk update
-                                                            if ($Fix) { $Params += @('--edit', "track:$($sub.id + 1)", '--set', "language=$detected") }
+                                                            if ($Fix) { $Params += @('--edit', "track:$($sub.id + 1)", '--set', "language=$writeLang") }
                                                             $needsChange = $true
                                                             $sub.properties.language = $detected
                                                         }
@@ -2878,12 +2879,6 @@ foreach ($folderPath in $targetFolders) {
                                             elseif ($Honorifics -and $isWinnerHon) { "eng" } 
                                             elseif ($winner.Lang -eq "enm") { "eng" } 
                                             else { $targetSubLang }
-                    
-                    # [FIX] Determine Effective Language for Validity Check (DSA Detected vs Header)
-                    $winnerEffLang = if ($dsaDetected) { $dsaDetected } else { $winner.Lang }
-                    
-                    # Ensure Honorifics detection takes precedence over standard preferred language rules
-                    if ($Honorifics -and $winnerEffLang -eq "enm") { $correctLangForWinner = "enm" }
 
                     # PREFERRED OR NOTHING: Use Effective Language to authorize the Default flag
                     $isWinnerValidForDefault = ($winnerEffLang -eq $targetSubLang) -or ($winnerEffLang -eq "und") -or $isWinnerHon
