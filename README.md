@@ -3,12 +3,14 @@
 
 ---
 
-
 ## Overview
-MKVMetadataAuditor+Fixer is a high-performance automation suite built for media archivists who prioritize metadata integrity and container consistency. Designed to handle the complexities of large-scale libraries, the script acts as both a vigilant auditor and a precision repair tool. It eliminates the manual labor of checking track flags, language tags, and track titles by enforcing a standardized configuration across your collection. By identifying discrepancies in audio and subtitle tracks, it ensures that your media is always configured for your preferred playback experience.
+MKVMetadataAuditor+Fixer is a high-performance automation suite built for media archivists who prioritize metadata integrity and container consistency. It operates by analyzing the underlying metadata headers of your files without remuxing or re-encoding the actual streams, ensuring 1:1 data integrity.
 
-## Technical Logic
-The script employs a dual-engine approach to process files—handling Anime and Western media with specialized audit logic—and utilizes a customizable JSON-based defaults system to resolve metadata errors automatically. It features a robust gatekeeper engine that allows users to exclude specific directories via a switch-enabled (`-ep`) text-based bypass. With direct integration with `mkvpropedit`, the tool provides granular control over MKV headers, allowing for the batch correction of language codes and default/forced track flags without the need for full file remuxing.
+### The Scoring Engine
+The script employs a sophisticated weighted scoring algorithm to determine which subtitle track should be the 'Default'. It automatically penalizes 'Signs & Songs' tracks (-200) while prioritizing full dialogue (+150). It further factors in Codec Priority (up to +100), Honorifics bonuses (+300), and even positional penalties (-40 per slot). This ensures that even in complex files with 10+ tracks, the most complete English dialogue track is selected for the viewer.
+
+### Hardware Compatibility (NoHW Search)
+Beyond standard metadata auditing, the suite includes a specialized compatibility engine targeting video profiles that lack Hardware Acceleration (NoHW) on consumer devices. It specifically isolates legacy 10-bit AVC encodes, Chroma 4:2:2, Chroma 4:4:4, and RGB color spaces which frequently cause stuttering or playback failure on Smart TVs and mobile devices.
 
 ## Usage Examples
 ```powershell
@@ -21,11 +23,11 @@ The script employs a dual-engine approach to process files—handling Anime and 
 # Update Video Language (Chinese) & Save to Config
 .\MKVMetadataAuditor+Fixer.ps1 -Fix -vid chi -vidf -ovrd -Path 'G:\Media\Anime'
 
-# Direct Fix (No Backup) with Codec Priority
-.\MKVMetadataAuditor+Fixer.ps1 -Fix -FixNoBackup -sc 'ass,srt' -ovrd -Path 'G:\Media\Anime'
+# Direct Fix (No Backup) with Codec Priority (Implicitly enables -Fix)
+.\MKVMetadataAuditor+Fixer.ps1 -FixNoBackup -sc 'ass,srt' -ovrd -Path 'G:\Media\Anime'
 
-# AVC High 10 Deep Scan Library Sweep (Fast Mode)
-.\MKVMetadataAuditor+Fixer.ps1 -h10p -fast -Path 'G:\Media\Anime'
+# NoHW Hardware Compatibility Sweep (Fast Mode)
+.\MKVMetadataAuditor+Fixer.ps1 -nohw -fast -Path 'G:\Media\Anime'
 ```
 ---
 
@@ -36,16 +38,16 @@ The script employs a dual-engine approach to process files—handling Anime and 
 | :--- | :--- |
 | `-Path <string>` | Defines the target directory for recursive scanning. |
 | `-Fix` | Enables **Write Mode**. Without this, the script runs in read-only audit mode. |
-| `-FixNoBackup` | Overwrites metadata directly on source files (disables `_updated` folder). |
-| `-overrideDefaults \| -ovrd` | **Mandatory** when using automation flags to save parameters to the JSON config. |
+| `-FixNoBackup` | **Surgical Overwrite:** Disables the safety `_updated` folder and writes changes directly to source files. Implicitly enables `-Fix`. |
+| `-overrideDefaults \| -ovrd` | **Configuration Safety Lock:** Mandatory when using automation flags to save session parameters as the new permanent JSON defaults. |
 
 ### Mode & Search Flags
 | Flag | Description |
 | :--- | :--- |
 | `-Western \| -w \| -west \| -WesternMode` | Sets defaults for Western media (English audio/subs). |
-| `-AvcHigh10Search \| -h10p` | **Search Mode:** Scans specifically for AVC High 10 (10-bit) video streams. |
-| `-fast` | Speeds up the High 10 search by skipping extended metadata checks. |
-| `-LogFullPath \| -lfp` | Forces the log to write the full file path instead of just the folder path during a fast AVC High 10 search. Requires -fast. |
+| `-NoHwVideoSearch \| -NoHw` | **NoHW Search Mode:** Scans for hardware-incompatible profiles (AVC Hi10P, Chroma 4:2:2, Chroma 4:4:4, RGB). |
+| `-fast` | Speeds up the NoHW search by skipping extended metadata checks (scans only the first file per folder). |
+| `-LogFullPath \| -lfp` | Forces the log to write the full file path instead of just the folder path during a fast NoHW search. Requires `-fast`. |
 | `-disableRecurse \| -nr` | **No-Recurse:** Disables subfolder scanning; only processes the root path. |
 
 ### Track Priorities & Automation
@@ -54,38 +56,38 @@ The script employs a dual-engine approach to process files—handling Anime and 
 | `-videoLanguage \| -vid <string>` | Targets the video track language (3-letter ISO code). |
 | `-videoForceUpdate \| -vidf` | **Safety Toggle:** Confirms video language changes on files that otherwise pass audit. |
 | `-audioLanguageUpdate \| -audf` | **Safety Toggle:** Confirms audio language changes on files that otherwise pass audit. |
-| `-audioLanguagePriority \| -aud <string>` | Sets primary audio language (e.g., 'jpn') and sets it as 'Default'. |
+| `-audioLanguagePriority \| -aud <string>` | Sets primary audio language (e.g., `jpn`) and sets it as 'Default'. |
 | `-subtitleLanguagePriority \| -sub <string>` | Sets primary subtitle language. Uses weighted scoring for best dialogue track. |
-| `-subtitleCodecPriority \| -sc <string>` | Comma-separated list (e.g., 'ass,srt') to dictate subtitle format preference. |
-| `-Honorifics \| -Hon` | Injects a **+300 score bonus** to tracks labeled 'honorifics' or 'enm'. |
-| `-SubtitleFactorTrackOrder \| -SFTO \| -SubTrackOrder \| -TrackOrder` | Instructs the weighted scoring algorithm to factor in the physical track placement when determining priorities for subtitle selection. |
-| `-FansubGroupPriority \| -fg <string>` | Sets preferred fansub groups for subtitle track prioritization (e.g., `-fg 'commie'`). Pass an empty string (`""`) to clear preferences via CLI. |
-| `-DeepSubtitleAudit \| -DSA \| -Deep \| -DeepAudit` | Triggers an advanced audit for files containing exactly two unnamed text subtitle tracks with matching codecs. If track headers are ambiguous, it extracts the streams to analyze file size deltas, automatically classifying the smaller track as Signs & Songs and the larger track as Full Dialogue. When executed with the `-Fix` switch, the script will automatically apply the correct names to the tracks via `mkvpropedit`. Includes built-in safety margins to skip processing if both tracks are nearly identical in size (e.g., dual Full Dialogue tracks). |
-| `-DeepSubtitleAuditDebugExtraction \| -DSADebugEx \| -DeepDebugEx \| -DeepAuditDbgEx \| -DSADE` | Forces the DSA engine to skip the 'Stage 1 Header Probe' and proceed directly to 'Stage 2 Extraction'. Useful for testing the bitstream size analysis on files with valid headers. |
+| `-subtitleCodecPriority \| -sc <string>` | Comma-separated list (e.g., `ass,srt`) to dictate subtitle format preference. |
+| `-Honorifics \| -Hon` | Injects a **+300 score bonus** to tracks labeled 'honorifics' or `enm`. |
+| `-SubtitleFactorTrackOrder \| -SFTO \| -TrackOrder` | **Positional Penalty:** Subtracts 40 points per track position, prioritizing tracks located closer to the top of the container. |
+| `-FansubGroupPriority \| -fg <string>` | Sets preferred fansub groups for subtitle track prioritization (e.g., `-fg 'commie'`). |
+| `-DeepSubtitleAudit \| -DSA \| -Deep` | **Intelligence Tier:** Uses a 3-stage process (Header Probe, Extraction, Bitstream Analysis) to resolve ambiguous track names. Automatically identifies 'Full Dialogue' vs 'Signs & Songs' via file size ratios (2.0x for text / 3.0x for image). |
+| `-DeepSubtitleAuditDebugExtraction \| -DSADE` | Forces the DSA engine to skip the 'Header Probe' and proceed directly to physical bitstream extraction. Required for forcing size checks on image-based tracks. |
 | `-SubtitlesHearingImpaired \| -sdh \| -hi \| -hicc \| -cc` | Prioritizes 'Hearing Impaired' or 'SDH' subtitle tracks (Western Mode). |
 | `-OverrideWesternDefaults \| -ovrdw` | Allows the script to save custom Western mode parameters to the JSON configuration. |
 
 ### Advanced & Log Management Flags
 | Flag | Description |
 | :--- | :--- |
-| `-VerifyUpdates \| -V \| -Verify` | Chains an automated second-pass verification audit immediately after fixing to confirm metadata integrity. Requires `-Fix`. |
-| `-DevDebug \| -Dev \| -DevD \| -DBG \| -DDBG` | Global Debugging Switch. Clears standard UI reduction rules to expose low-level automated processes (tool discovery paths). Disables standard console clearing behavior during AVC High 10 Searches, forces real-time Deep Subtitle Audit (DSA) extraction tracking, and surfaces detailed arithmetic track-scoring metrics. |
+| `-VerifyUpdates \| -V \| -Verify` | **Closed-Loop Verification:** Launches a second-pass audit immediately after fixing to confirm all discrepancies were resolved. |
+| `-DevDebug \| -Dev \| -DevD \| -DBG` | **Exposing the Black Box:** Disables UI suppression to reveal tool system paths, exact scoring arithmetic, and real-time DSA tracing. |
 | `-help \| -manual` | Displays the internal help manual. |
-| `-DelLog` | Clears all historically accumulated files within the logs directory before starting operations. |
+| `-DelLog` | **Fresh Start:** Clears all files within the logs directory before starting the operation. |
 | `-ClearDefaults \| -clr` | Deletes the saved Anime configuration JSON template to reset rules back to factory conditions. |
 | `-ClearWesternDefaults \| -clrw` | Deletes the custom Western configuration file to purge specialized rules. |
 | `-ClearAllDefaults \| -cla` | Total system purge of both Anime and Western configuration JSON structures. |
-| `-excludePaths \| -ep` | Enables the directory suppression exclusion engine (`MKVMetadataAuditor+Fixer__Excluded-Paths.txt`). |
+| `-excludePaths \| -ep` | Enables the suppression engine (`MKVMetadataAuditor+Fixer__Excluded-Paths.txt`). |
 | `-Version \| -Ver` | Displays the script's current version number and exits immediately. |
 
 ---
 
 ## Dependencies
 * **MKVToolNix:** Required for header probing (`mkvmerge`), raw subtitle extraction (`mkvextract`), and metadata editing (`mkvpropedit`).
-* **MediaInfo:** Required for video profile verification during AVC High 10 searches.
+* **MediaInfo CLI:** Required for video profile verification during NoHW searches.
 
 ## Support & Maintenance
-**This repository is provided "as-is" for archival purposes.** I am not actively looking for feedback, feature requests, or bug reports. The issue tracker is disabled, and I will not be responding to inquiries regarding setup or usage.
+**This repository is provided "as-is" for archival purposes.** The author is not actively looking for feedback, feature requests, or bug reports. The issue tracker is disabled, and the author will not be responding to inquiries regarding setup or usage.
 
 ## Disclaimer
 *This script modifies MKV file headers and metadata. While designed for safety, always ensure you have backups of your media before running batch operations. The author is not responsible for any accidental data loss or corruption resulting from the use of this tool.*
@@ -93,4 +95,4 @@ The script employs a dual-engine approach to process files—handling Anime and 
 ---
 > **Document Control**  
 > *This document is up-to-date with the following version of MKVMetadataAuditor+Fixer.*  
-> *2026.05.30__16.25.24*
+> *2026.06.10__14.59.00*
