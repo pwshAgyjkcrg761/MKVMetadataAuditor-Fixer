@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: MKVMetadataAuditor+Fixer.ps1
-# VERSION: 2026.06.10__11.46.00
+# VERSION: 2026.06.10__13.00.00
 # TARGET: PowerShell 7.6.2 LTS
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -128,7 +128,7 @@ if ($FixNoBackup) { $Fix = $true }
 if ($DeepSubtitleAuditDebugExtraction -or $DeepSubtitleAuditLanguageDetectionLimit2 -or $DeepSubtitleAuditNOLanguageDetection) { $DeepSubtitleAudit = $true }
 
 # --- GLOBAL VERSION DEFINITION ---
-$scriptVersion = "2026.06.10__11.46.00"
+$scriptVersion = "2026.06.10__13.00.00"
 
 # --- VERSION REPORTER ---
 if ($Version) {
@@ -1813,8 +1813,10 @@ if ($fast) {
 }
 $sessionProgressIndex = 0
 if ($NoHwVideoSearch) {
-    Get-NoHwLogHeader -Fast:$fast -RootPath $inputPaths[0] | Out-File -LiteralPath $noHwLog -Encoding utf8
+    # Initialize log with placeholder to ensure the file exists for appending
+    @("--- SCAN IN PROGRESS ---", "Results will be finalized at the end of the session.", "") | Out-File -LiteralPath $noHwLog -Encoding utf8
 }
+
 foreach ($folderPath in $targetFolders) {
     # [MODULE] Check for Exclusions
     if (Test-IsExcluded -CurrentPath $folderPath.FullName -Exclusions $exclusions -Active:$excludePaths) {
@@ -1952,11 +1954,11 @@ foreach ($folderPath in $targetFolders) {
         $noHwList.Clear()
         Write-Host "" # Clears the inline progress line
 
-        # CHECK TIMER: If 60 seconds passed, flush to disk
-        if (([DateTime]::Now - $lastFlushTime).TotalSeconds -ge 60 -and $logBuffer.Count -gt 0) {
-            Write-Host " [i] 60s Elapsed: Flushing log buffer to disk..." -ForegroundColor Cyan
-            $logBuffer | Out-File -LiteralPath $noHwLog -Append -Encoding utf8
-            $logBuffer.Clear()
+        # CHECK TIMER: If 60 seconds passed, flush session results to disk for data safety
+        if (([DateTime]::Now - $lastFlushTime).TotalSeconds -ge 60 -and $sessionNoHwList.Count -gt 0) {
+            Write-Host " [i] 60s Elapsed: Flushing discoveries to disk for safety..." -ForegroundColor Cyan
+            $sessionNoHwList | Out-File -LiteralPath $noHwLog -Append -Encoding utf8
+            $sessionNoHwList.Clear()
             $lastFlushTime = [DateTime]::Now
         }
 
@@ -3095,12 +3097,28 @@ if ($CurrentJob.Mode -eq "Verification") {
 } # <--- END JOB LOOP (Closing the 'for' loop)
 
 # Final Session Report Generation (NoHW Mode)
-if ($NoHwVideoSearch -and ($sessionNoHwList.Count -gt 0)) {
-    $finalOutput = New-Object System.Collections.Generic.List[string]
-    $finalOutput.AddRange([string[]](Get-NoHwLogHeader -Fast:$fast -RootPath $inputPaths[0] -Flags @($sessionFlags)))
-    $finalOutput.Add("") # Single gap after header
-    $finalOutput.AddRange($sessionNoHwList)
-    $finalOutput | Out-File -LiteralPath $noHwLog -Encoding utf8
+if ($NoHwVideoSearch) {
+    # 1. Grab any findings that haven't been flushed yet
+    $remaining = @()
+    if ($sessionNoHwList.Count -gt 0) { $remaining = $sessionNoHwList.ToArray() }
+
+    # 2. Read existing discoveries from disk (skipping our placeholder lines)
+    $diskContent = if (Test-Path $noHwLog) { 
+        Get-Content -LiteralPath $noHwLog | Where-Object { $_ -notmatch "^--- SCAN IN PROGRESS ---$|^Results will be finalized" } 
+    } else { @() }
+
+    # 3. Combine everything
+    $allResults = @($diskContent + $remaining) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+
+    if ($allResults.Count -gt 0) {
+        $finalOutput = New-Object System.Collections.Generic.List[string]
+        $finalOutput.AddRange([string[]](Get-NoHwLogHeader -Fast:$fast -RootPath $inputPaths[0] -Flags @($sessionFlags)))
+        $finalOutput.Add("") # Single gap after header
+        $finalOutput.AddRange([string[]]$allResults)
+        
+        # 4. Perform the final surgical overwrite
+        $finalOutput | Out-File -LiteralPath $noHwLog -Encoding utf8
+    }
 }
 
 # --- FINAL GLOBAL SUMMARY ---
