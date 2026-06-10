@@ -1,7 +1,7 @@
 # ==============================================================================
 # SCRIPT: Wrapper_MKVMetadataAuditor+Fixer.ps1
-# VERSION: 2026.05.23__08.28.32
-# TARGET: PowerShell 7.6.1 LTS
+# VERSION: 2026.06.10__06.18.10
+# TARGET: PowerShell 7.6.2 LTS
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
 # 
@@ -33,12 +33,21 @@
 param(
     [Parameter(Mandatory = $false)]
     [switch]$Audit,
+    
+    [Parameter(Mandatory = $false)]
+    [switch]$AuditDebug,
 
     [Parameter(Mandatory = $false)]
     [switch]$UsualFix,
 
     [Parameter(Mandatory = $false)]
-    [switch]$DebugFix,
+    [switch]$FixDebug,
+    
+    [Parameter(Mandatory = $false)]
+    [switch]$FixNoSFTO,
+    
+    [Parameter(Mandatory = $false)]
+    [switch]$FixNoSFTONoBackup,
 
     [Parameter(Mandatory = $false)]
     [switch]$Temp,
@@ -61,16 +70,22 @@ $profileFlags = ""
 switch ($true) {
     #Audit with Excluded Paths
     $Audit { $profileFlags = "-ep"; break }
+    #Audit Debug with Excluded Paths
+    $AuditDebug { $profileFlags = "-DBG -ep"; break }
     #Audit+Fix Veify, fix, honorifics, audio language update, subtitles factor track order, verify, excluded paths
     $UsualFix { $profileFlags = "-Fix -hon -audf -SFTO -VerifyUpdates -ep"; break }
-    #Debug Mode
-    $DebugFix { $profileFlags = "-Fix -fixdebug -hon -audf -SFTO -VerifyUpdates -ep"; break }
+    #Fix Debug
+    $FixDebug { $profileFlags = "-Fix -DSA -DBG -hon -SFTO -audf -VerifyUpdates -ep"; break }
+    #Fix No SFTO
+    $FixNoSFTO { $profileFlags = "-Fix -DSA -DBG -hon -audf -VerifyUpdates -ep"; break }
+    #Fix No SFTO
+    $FixNoSFTONoBackup { $profileFlags = "-FixNoBackup -DSA -DBG -hon -audf -VerifyUpdates -ep"; break }
     #Temp for whatever.
     $Temp { $profileFlags = "-Fix -fixdebug -hon -audf -SFTO -VerifyUpdates -ep"; break }
     #Chinese Donghua
-    $ChiD { $profileFlags = "-Fix -ovrd -vid 'chi' -aud 'chi' -sub 'eng' -audf -SFTO -VerifyUpdates -ep"; break }
+    $ChiD { $profileFlags = "-Fix -ovrd -vid 'chi' -aud 'chi' -sub 'eng' -audf -SFTO -DSA -DBG -VerifyUpdates -ep"; break }
     #Korean Aeni
-    $KorA { $profileFlags = "-Fix -ovrd -vid 'kor' -aud 'kor' -sub 'eng' -audf -SFTO -VerifyUpdates -ep"; break }
+    $KorA { $profileFlags = "-Fix -ovrd -vid 'kor' -aud 'kor' -sub 'eng' -audf -SFTO -DSA -DBG -VerifyUpdates -ep"; break }
     
 }
 
