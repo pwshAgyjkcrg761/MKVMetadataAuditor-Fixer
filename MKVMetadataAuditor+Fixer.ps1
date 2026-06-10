@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: MKVMetadataAuditor+Fixer.ps1
-# VERSION: 2026.06.08__15.13.00
+# VERSION: 2026.06.10__10.13.00
 # TARGET: PowerShell 7.6.2 LTS
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -128,7 +128,7 @@ if ($FixNoBackup) { $Fix = $true }
 if ($DeepSubtitleAuditDebugExtraction -or $DeepSubtitleAuditLanguageDetectionLimit2 -or $DeepSubtitleAuditNOLanguageDetection) { $DeepSubtitleAudit = $true }
 
 # --- GLOBAL VERSION DEFINITION ---
-$scriptVersion = "2026.06.08__15.13.00"
+$scriptVersion = "2026.06.10__10.13.00"
 
 # --- VERSION REPORTER ---
 if ($Version) {
@@ -540,7 +540,8 @@ function Get-AuditFlags {
     $RegexDiag = $script:RegexDiag
     $RegexSign = $script:RegexSign
 
-    $reasons = ""; 
+    $reasons = "";
+    if (($tracks | Measure-Object).Count -eq 0) { $reasons += "💀 [Corrupt/No Tracks Found] "; return $reasons.Trim() }    
     $jpnAud = $tracks | Where-Object { $_.type -eq "audio" -and $_.properties.language -eq "jpn" }
     $engAud = $tracks | Where-Object { $_.type -eq "audio" -and $_.properties.language -eq "eng" }
     $subs = $tracks | Where-Object { $_.type -eq "subtitles" }
@@ -1911,6 +1912,7 @@ foreach ($folderPath in $targetFolders) {
 
             if (-not $status.IsReadable) {
                 $corruptCount++
+                [void]$foundFlags.Add("💀[Corrupt/No Tracks Found]")
                 $noHwList.Add("[ERROR] UNREADABLE: $($f.FullName) - Reason: $($status.Error)")
                 Write-Host "`n  [!] CORRUPT/UNREADABLE FILE FOUND: $($f.Name)" -ForegroundColor DarkRed
             }
@@ -1929,9 +1931,22 @@ foreach ($folderPath in $targetFolders) {
                 Write-Host "`n  [!] Found NoHW ($($status.Flags)): $($f.Name)" -ForegroundColor DarkYellow
             }
         }
-        # Sorts alphabetically by the text inside the brackets (ignoring the emoji)
-        $sortedFlags = $foundFlags | Sort-Object { $_ -replace '^[^\[]+', '' }
-        $folderFoundLabel = if ($foundFlags.Count -gt 0) { "Found: " + ($sortedFlags -join ' ') } else { "" }
+        # [FIX] v2026.06.10 - Explicitly cast to arrays to prevent Unicode corruption (the  error)
+        $nohwOnly = @($foundFlags | Where-Object { $_ -notmatch "Corrupt" } | Sort-Object { $_ -replace '^[^\[]+', '' })
+        $corruptOnly = @($foundFlags | Where-Object { $_ -match "Corrupt" })
+        
+        $folderFoundLabel = New-Object System.Collections.Generic.List[string]
+        if ($nohwOnly.Count -gt 0) {
+            $folderFoundLabel.Add("Found: " + ($nohwOnly -join ' '))
+        }
+        
+        if ($corruptOnly.Count -gt 0) {
+            # Alignment: Matches the 7-space indent requested for the Skull emoji
+            $prefix = if ($nohwOnly.Count -gt 0) { "       " } else { "Found: " }
+            foreach ($cEntry in $corruptOnly) {
+                $folderFoundLabel.Add("$prefix$cEntry")
+            }
+        }
         Write-Host "" # Clears the inline progress line
         
         # v2026.05.13_16.32.00 - Periodic 60-Second Flush
@@ -1947,7 +1962,9 @@ foreach ($folderPath in $targetFolders) {
             $logBuffer.Add($timestamp)
             if ($fast) { $logBuffer.Add("Fast Scan - First File in Each Folder Only") }
             $logBuffer.Add("Folder: $($folderPath.FullName)")
-            if ($folderFoundLabel) { $logBuffer.Add($folderFoundLabel) }
+            if ($folderFoundLabel.Count -gt 0) {
+                foreach ($line in $folderFoundLabel) { $logBuffer.Add($line) }
+            }
             $logBuffer.Add("Recommend convert to HEVC Main 10, Chroma Subsampling: 4:2:0, Color Space: YUV")
             $logBuffer.Add($border)
 
@@ -1963,7 +1980,7 @@ foreach ($folderPath in $targetFolders) {
         # CHECK TIMER: If 60 seconds passed, flush to disk
         if (([DateTime]::Now - $lastFlushTime).TotalSeconds -ge 60 -and $logBuffer.Count -gt 0) {
             Write-Host " [i] 60s Elapsed: Flushing log buffer to disk..." -ForegroundColor Cyan
-            $logBuffer | Out-File -FilePath $noHwLog -Append -Encoding utf8
+            $logBuffer | Out-File -LiteralPath $noHwLog -Append -Encoding utf8
             $logBuffer.Clear()
             $lastFlushTime = [DateTime]::Now
         }
@@ -2006,12 +2023,14 @@ foreach ($folderPath in $targetFolders) {
             # 3. Get JSON and build signature
             $json = & $mkvmerge -J $f.FullName | ConvertFrom-Json
             $f | Add-Member -NotePropertyName "PristineJson" -NotePropertyValue $json -Force
-            # [CHANGE] v2026.05.29__15.48.15 - Add Selector (Sel) to Audit Signature
+            # [FIX] v2026.06.10 - Incorporate NoHW Profile into signature to force unique grouping
+            $noHwStatus = Test-IsNoHw -FilePath $f.FullName -MediaInfoPath $mediainfo
             Get-AuditSelector -Reset
             $sig = (($json.tracks | ForEach-Object { 
                 $p = $_.properties
                 $sel = Get-AuditSelector $_.type
-                "$($_.id)|$sel|$($_.type)|$($_.codec)|$($p.language)|Def:$([bool]$p.default_track)|Frc:$([bool]$p.forced_track)|HI:$([bool]$p.flag_hearing_impaired)|$($p.track_name)" 
+                $hwSig = if ($_.type -eq "video" -and $noHwStatus.IsReadable) { "|NoHW:$($noHwStatus.Flags)" } else { "" }
+                "$($_.id)|$sel|$($_.type)|$($_.codec)|$($p.language)|Def:$([bool]$p.default_track)|Frc:$([bool]$p.forced_track)|HI:$([bool]$p.flag_hearing_impaired)|$($p.track_name)$hwSig" 
             }) -join "`n")
             
             # Signature Debugging
@@ -3102,7 +3121,7 @@ if ($CurrentJob.Mode -eq "Verification") {
 
 # v2026.05.13_16.32.00 - Final Flush after loop ends
 if ($logBuffer.Count -gt 0) {
-    $logBuffer | Out-File -FilePath $noHwLog -Append -Encoding utf8
+    $logBuffer | Out-File -LiteralPath $noHwLog -Append -Encoding utf8
     $logBuffer.Clear()
 }
 
