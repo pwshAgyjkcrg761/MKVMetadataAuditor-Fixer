@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: MKVMetadataAuditor+Fixer.ps1
-# VERSION: 2026.06.10__10.13.00
+# VERSION: 2026.06.10__11.46.00
 # TARGET: PowerShell 7.6.2 LTS
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -128,7 +128,7 @@ if ($FixNoBackup) { $Fix = $true }
 if ($DeepSubtitleAuditDebugExtraction -or $DeepSubtitleAuditLanguageDetectionLimit2 -or $DeepSubtitleAuditNOLanguageDetection) { $DeepSubtitleAudit = $true }
 
 # --- GLOBAL VERSION DEFINITION ---
-$scriptVersion = "2026.06.10__10.13.00"
+$scriptVersion = "2026.06.10__11.46.00"
 
 # --- VERSION REPORTER ---
 if ($Version) {
@@ -342,16 +342,25 @@ function Test-IsNoHw {
 }
 
 function Get-NoHwLogHeader {
-    param([switch]$Fast)
+    param([switch]$Fast, [string]$RootPath, [string[]]$Flags)
     $ts = Get-Date -Format "yyyy-MM-dd HH:mm"
     $lines = New-Object System.Collections.Generic.List[string]
     $lines.Add("-" * 89)
-    $lines.Add($ts)
+    $ts | ForEach-Object { $lines.Add($_) }
+    $lines.Add("Folder: $RootPath")
     if ($Fast) { $lines.Add("Fast Scan - First File in Each Folder Only") }
-    $lines.Add("NoHW Compatibility Issues Found (Hi10P/4:4:4/4:2:2/RGB)")
+    
+    $nohwOnly = @($Flags | Where-Object { $_ -notmatch "Corrupt" } | Sort-Object { $_ -replace '^[^\[]+', '' })
+    $corruptOnly = @($Flags | Where-Object { $_ -match "Corrupt" })
+    
+    if ($nohwOnly.Count -gt 0) { $lines.Add("Found: " + ($nohwOnly -join ' ')) }
+    if ($corruptOnly.Count -gt 0) {
+        $prefix = if ($nohwOnly.Count -gt 0) { "       " } else { "Found: " }
+        foreach ($cEntry in $corruptOnly) { $lines.Add("$prefix$cEntry") }
+    }
+    
     $lines.Add("Recommend convert to HEVC Main 10, Chroma Subsampling: 4:2:0, Color Space: YUV")
     $lines.Add("-" * 89)
-    $lines.Add("")
     return $lines
 }
 
@@ -1330,6 +1339,8 @@ if (Test-Path $script:GlobalTemp) {
 New-Item -Path $script:GlobalTemp -ItemType Directory | Out-Null
 
 $noHwList = New-Object System.Collections.Generic.List[string]
+$sessionFlags = New-Object System.Collections.Generic.HashSet[string]
+$sessionNoHwList = New-Object System.Collections.Generic.List[string]
 $noHwCount = 0
 $corruptCount = 0
 
@@ -1801,6 +1812,9 @@ if ($fast) {
     Write-Progress -Activity "Initializing Session" -Completed
 }
 $sessionProgressIndex = 0
+if ($NoHwVideoSearch) {
+    Get-NoHwLogHeader -Fast:$fast -RootPath $inputPaths[0] | Out-File -LiteralPath $noHwLog -Encoding utf8
+}
 foreach ($folderPath in $targetFolders) {
     # [MODULE] Check for Exclusions
     if (Test-IsExcluded -CurrentPath $folderPath.FullName -Exclusions $exclusions -Active:$excludePaths) {
@@ -1913,7 +1927,8 @@ foreach ($folderPath in $targetFolders) {
             if (-not $status.IsReadable) {
                 $corruptCount++
                 [void]$foundFlags.Add("💀[Corrupt/No Tracks Found]")
-                $noHwList.Add("[ERROR] UNREADABLE: $($f.FullName) - Reason: $($status.Error)")
+                $errPath = if ($fast -and -not $LogFullPath) { $folderPath.FullName.TrimEnd('\') } else { $f.FullName }
+                $noHwList.Add("💀 [ERROR] UNREADABLE: $errPath - Reason: $($status.Error)")
                 Write-Host "`n  [!] CORRUPT/UNREADABLE FILE FOUND: $($f.Name)" -ForegroundColor DarkRed
             }
             elseif ($status.IsNoHw) {
@@ -1931,51 +1946,11 @@ foreach ($folderPath in $targetFolders) {
                 Write-Host "`n  [!] Found NoHW ($($status.Flags)): $($f.Name)" -ForegroundColor DarkYellow
             }
         }
-        # [FIX] v2026.06.10 - Explicitly cast to arrays to prevent Unicode corruption (the  error)
-        $nohwOnly = @($foundFlags | Where-Object { $_ -notmatch "Corrupt" } | Sort-Object { $_ -replace '^[^\[]+', '' })
-        $corruptOnly = @($foundFlags | Where-Object { $_ -match "Corrupt" })
-        
-        $folderFoundLabel = New-Object System.Collections.Generic.List[string]
-        if ($nohwOnly.Count -gt 0) {
-            $folderFoundLabel.Add("Found: " + ($nohwOnly -join ' '))
-        }
-        
-        if ($corruptOnly.Count -gt 0) {
-            # Alignment: Matches the 7-space indent requested for the Skull emoji
-            $prefix = if ($nohwOnly.Count -gt 0) { "       " } else { "Found: " }
-            foreach ($cEntry in $corruptOnly) {
-                $folderFoundLabel.Add("$prefix$cEntry")
-            }
-        }
+        # Dynamic Session Aggregation
+        foreach ($flag in $foundFlags) { [void]$sessionFlags.Add($flag) }
+        foreach ($item in $noHwList)   { $sessionNoHwList.Add($item) }
+        $noHwList.Clear()
         Write-Host "" # Clears the inline progress line
-        
-        # v2026.05.13_16.32.00 - Periodic 60-Second Flush
-        if ($noHwList.Count -gt 0) {
-            $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm"
-
-            
-            # Detailed Block Construction
-            $border = "-" * 89
-            $leadingSpace = (Test-Path $noHwLog) -or ($logBuffer.Count -gt 0) ? "`r`n" : ""
-            
-            $logBuffer.Add("$leadingSpace$border")
-            $logBuffer.Add($timestamp)
-            if ($fast) { $logBuffer.Add("Fast Scan - First File in Each Folder Only") }
-            $logBuffer.Add("Folder: $($folderPath.FullName)")
-            if ($folderFoundLabel.Count -gt 0) {
-                foreach ($line in $folderFoundLabel) { $logBuffer.Add($line) }
-            }
-            $logBuffer.Add("Recommend convert to HEVC Main 10, Chroma Subsampling: 4:2:0, Color Space: YUV")
-            $logBuffer.Add($border)
-
-            # In Standard mode, list the files below the border. In Fast mode, end the block at the border.
-            if (-not $fast) {
-                $logBuffer.Add("")
-                foreach ($line in $noHwList) { $logBuffer.Add($line) }
-            }
-            
-            $noHwList.Clear()
-        }
 
         # CHECK TIMER: If 60 seconds passed, flush to disk
         if (([DateTime]::Now - $lastFlushTime).TotalSeconds -ge 60 -and $logBuffer.Count -gt 0) {
@@ -3119,16 +3094,14 @@ if ($CurrentJob.Mode -eq "Verification") {
 
 } # <--- END JOB LOOP (Closing the 'for' loop)
 
-# v2026.05.13_16.32.00 - Final Flush after loop ends
-if ($logBuffer.Count -gt 0) {
-    $logBuffer | Out-File -LiteralPath $noHwLog -Append -Encoding utf8
-    $logBuffer.Clear()
+# Final Session Report Generation (NoHW Mode)
+if ($NoHwVideoSearch -and ($sessionNoHwList.Count -gt 0)) {
+    $finalOutput = New-Object System.Collections.Generic.List[string]
+    $finalOutput.AddRange([string[]](Get-NoHwLogHeader -Fast:$fast -RootPath $inputPaths[0] -Flags @($sessionFlags)))
+    $finalOutput.Add("") # Single gap after header
+    $finalOutput.AddRange($sessionNoHwList)
+    $finalOutput | Out-File -LiteralPath $noHwLog -Encoding utf8
 }
-
-
-
-
-
 
 # --- FINAL GLOBAL SUMMARY ---
 if ($noHwCount -gt 0 -or $corruptCount -gt 0) {
@@ -3140,6 +3113,7 @@ if ($noHwCount -gt 0 -or $corruptCount -gt 0) {
     Write-Host " Log: $noHwLog" -ForegroundColor Gray
     Write-Host "==================================================" -ForegroundColor DarkYellow
 }
+
 
 Write-Host "Complete." -ForegroundColor DarkCyan
 
