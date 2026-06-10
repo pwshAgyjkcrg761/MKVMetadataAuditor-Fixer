@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: MKVMetadataAuditor+Fixer.ps1
-# VERSION: 2026.06.10__13.00.00
+# VERSION: 2026.06.10__15.36.00
 # TARGET: PowerShell 7.6.2 LTS
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -128,7 +128,7 @@ if ($FixNoBackup) { $Fix = $true }
 if ($DeepSubtitleAuditDebugExtraction -or $DeepSubtitleAuditLanguageDetectionLimit2 -or $DeepSubtitleAuditNOLanguageDetection) { $DeepSubtitleAudit = $true }
 
 # --- GLOBAL VERSION DEFINITION ---
-$scriptVersion = "2026.06.10__13.00.00"
+$scriptVersion = "2026.06.10__15.36.00"
 
 # --- VERSION REPORTER ---
 if ($Version) {
@@ -888,7 +888,7 @@ function Show-ProjectManual {
     Write-Host "============================================================" -ForegroundColor Cyan
                " MKVMetadataAuditor+Fixer.ps1 v$scriptVersion  ",
                " MANUAL & USAGE GUIDE" | ForEach-Object { Write-Host $_ -ForegroundColor DarkMagenta }
-    Write-Host " Copyright (C) 2026 pwsh.Agyjkcrg761`n" -ForegroundColor DarkCyan
+    Write-Host " Copyright (C) 2026 pwshAgyjkcrg761`n" -ForegroundColor DarkCyan
     
      " This program is free software: you can redistribute it and/or",
      " modify it under the terms of the GNU General Public License as",
@@ -898,17 +898,31 @@ function Show-ProjectManual {
     
     Write-Host "`n OVERVIEW:" -ForegroundColor DarkYellow
      "  This utility is a high-fidelity media management tool designed to ensure",
-     "  structural consistency across MKV libraries. It operates in two stages:",
+     "  structural consistency across MKV libraries. It operates by analyzing",
+     "  the underlying metadata headers of your files without remuxing or",
+     "  re-encoding the actual streams, ensuring 1:1 data integrity.",
+     "",
+     "  The script logic is divided into three specialized operational phases:",
      "  1. AUDIT: Scans files to identify 'Mismatch Groups' and track errors.",
      "  2. FIX:  Uses Mkvpropedit to align tracks with your preferred defaults.",
-     "  3. SEARCH: Locates specific video profiles like AVC High 10 (10-bit).`n",
+     "  3. SEARCH: Locates hardware-incompatible profiles like AVC High 10.",
+     "",
+     "  SCORING ENGINE:",
+     "  The script employs a sophisticated weighted scoring algorithm to",
+     "  determine which subtitle track should be the 'Default'. It automatically",
+     "  penalizes 'Signs & Songs' tracks (-200) while prioritizing full dialogue",
+     "  (+150). It further factors in Codec Priority (up to +100), Honorifics",
+     "  bonus (+300), and even physical Track Order penalties (-40 per slot).",
+     "  This ensures that even in complex files with 10+ tracks, the most",
+     "  complete English dialogue track is selected for the viewer.`n" | ForEach-Object { Write-Host $_ -ForegroundColor DarkMagenta }
 
-    "`n  This script intelligently handles track scoring, automatically penalizing",
-    "  'Signs & Songs' tracks while prioritizing full dialogue and honorifics.",
-    
-    "  The AVC High 10 Search (-h10p) bypasses standard auditing to quickly",
-    "  isolate legacy 10-bit encodes that may cause hardware compatibility",
-    "  issues, supporting both deep-dive and fast-scan logic.`n"   | ForEach-Object { Write-Host $_ -ForegroundColor DarkCyan }
+    Write-Host " DEEP SUBTITLE AUDIT (DSA):" -ForegroundColor DarkYellow
+    "  When track names are missing or generic (e.g., 'English'), the DSA",
+    "  engine performs a bitstream analysis. It extracts dialogue samples to",
+    "  calculate character density and file size ratios. By identifying the",
+    "  larger 'Full Dialogue' stream vs. the smaller 'Signs & Songs' stream,",
+    "  it can automatically rename tracks and fix language tags with near-",
+    "  perfect accuracy.`n" | ForEach-Object { Write-Host $_ -ForegroundColor DarkCyan }
     
     Write-Host " DEPENDENCIES:" -ForegroundColor DarkYellow
     "  • MKVToolNix (mkvmerge): Used for deep-probing file headers and", 
@@ -917,7 +931,7 @@ function Show-ProjectManual {
     "    to dump raw subtitle streams for size comparison analysis.",    
     "  • MKVToolNix (mkvpropedit): The primary tool for the 'Fix' engine,", 
     "    allowing instant metadata edits without remuxing the file.", 
-    "  • MediaInfo: Utilized specifically during AVC High 10 searches", 
+    "  • MediaInfo: Utilized specifically during NoHW searches", 
     "    to verify video profiles and bit-depth accuracy.`n" | ForEach-Object { Write-Host $_ -ForegroundColor DarkGray }
     
     Write-Host "`n USAGE:" -ForegroundColor DarkYellow
@@ -935,10 +949,10 @@ function Show-ProjectManual {
     Write-Host "    .\MKVMetadataAuditor+Fixer.ps1 -Fix -vid chi -vidf -ovrd -Path 'G:\Media\Anime'`n" -ForegroundColor DarkMagenta
 
     Write-Host "  Direct Fix (No Backup) with Codec Priority:`n" -ForegroundColor DarkGray
-    Write-Host "    .\MKVMetadataAuditor+Fixer.ps1 -Fix -FixNoBackup -sc 'ass,srt' -ovrd -Path 'G:\Media\Anime'`n" -ForegroundColor DarkCyan
+    Write-Host "    .\MKVMetadataAuditor+Fixer.ps1 -FixNoBackup -sc 'ass,srt' -ovrd -Path 'G:\Media\Anime'`n" -ForegroundColor DarkCyan
     
-    Write-Host "  AVC High 10 Deep Scan Library Sweep (Fast Mode):`n" -ForegroundColor DarkGray
-    Write-Host "    .\MKVMetadataAuditor+Fixer.ps1 -h10p -fast -Path 'G:\Media\Anime'`n" -ForegroundColor DarkMagenta
+    Write-Host "  Hardware Compatibility Deep Scan (NoHW Search):`n" -ForegroundColor DarkGray
+    Write-Host "    .\MKVMetadataAuditor+Fixer.ps1 -nohw -fast -Path 'G:\Media\Anime'`n" -ForegroundColor DarkMagenta
     
     Write-Host "`n CORE FLAGS:`n" -ForegroundColor DarkYellow
 
@@ -953,13 +967,21 @@ function Show-ProjectManual {
 )    
                         
     &$PrintManualBlock "  -FixNoBackup" @(
-    "      Disables the '_updated' sibling folder creation. Use with caution,",
-    "      as this overwrites metadata directly on the source files.`n"
+    "      Disables the safety-net creation of the '_updated' mirror folder.",
+    "      By default, the script protects your library by writing all",
+    "      changes to a sibling directory, leaving your original files untouched.",
+    "      Enabling this flag forces a 'Surgical Overwrite' directly on your",
+    "      source media. This is significantly faster and saves disk space",
+    "      but is irreversible if your scoring logic is misconfigured.`n"
 ) -ForceDescColor "DarkRed"
     
     &$PrintManualBlock "  -overrideDefaults | -ovrd" @(
-    "      Mandatory when using automation flags. It allows the script to",
-    "      write your current session parameters into the JSON config file.`n"
+    "      Acts as the 'Configuration Safety Lock'. To prevent accidental",
+    "      changes to your long-term library rules, any track priorities",
+    "      passed via the command line (like -aud or -sub) will be ignored",
+    "      unless this flag is present. When used, it commits your current",
+    "      session parameters to the JSON config file, making them the new",
+    "      permanent defaults for all future audits.`n"
 )
     
     Write-Host "`n MODE FLAGS:`n" -ForegroundColor DarkYellow
@@ -968,19 +990,23 @@ function Show-ProjectManual {
     "      Sets defaults for Western media (English audio/subs).`n"
 )
 
-    &$PrintManualBlock "  -NoHwVideoSearch | -nohw | -h10p" @(
-    "      Search Mode: Scans for NoHW compatibility issues (Hi10P, Chroma 4:2:2,",
-    "      Chroma 4:4:4, or RGB). Use with -fast for quicker scanning.`n"
+    &$PrintManualBlock "  -NoHwVideoSearch | -nohw" @(
+    "      Initiates a specialized compatibility audit targeting video profiles",
+    "      that lack Hardware Acceleration (NoHW) on consumer devices.",
+    "      It specifically isolates legacy AVC High 10 (10-bit) encodes,",
+    "      Chroma 4:2:2, Chroma 4:4:4, and RGB color spaces. These profiles",
+    "      frequently cause stuttering or playback failure on Smart TVs,",
+    "      mobile phones, and older streaming boxes.`n"
 )    
     
     &$PrintManualBlock "  -fast" @(
-    "      Speeds up the AVC High 10 Search by skipping extended metadata",
+    "      Speeds up the NoHW Search by skipping extended metadata",
     "      checks. In this mode, progress tracks Folders processed.`n"
 )
     
     &$PrintManualBlock "  -LogFullPath | -lfp" @(
     "      Forces the log to write the full file path instead of just the folder",
-    "      path during a fast AVC High 10 search. Requires -fast.`n"
+    "      path during a fast NoHW search. Requires -fast.`n"
 )
 
     &$PrintManualBlock "  -disableRecurse | -nr" @(
@@ -1028,9 +1054,13 @@ function Show-ProjectManual {
     "      or 'enm', ensuring they are selected over standard dialogue.`n"
 )
 
-    &$PrintManualBlock "  -SubtitleFactorTrackOrder | -SFTO | -SubTrackOrder | -TrackOrder" @(
-    "      Instructs the weighted scoring algorithm to factor in the physical",
-    "      track placement when determining priorities for subtitle selection.`n"
+    &$PrintManualBlock "  -SubtitleFactorTrackOrder | -SFTO | -TrackOrder" @(
+    "      Activates a 'Positional Penalty' within the scoring engine.",
+    "      When active, every subtitle track is penalized -40 points for each",
+    "      position it occupies away from the top. This is extremely effective",
+    "      for media groups that consistently place their primary dialogue",
+    "      track as the first subtitle entry, as it prevents high-scoring",
+    "      specialty tracks appearing later from accidentally winning.`n"
 )
     
     &$PrintManualBlock "  -FansubGroupPriority | -fg <string>" @(
@@ -1040,26 +1070,39 @@ function Show-ProjectManual {
 )
 
     &$PrintManualBlock "  -DeepSubtitleAudit | -DSA | -Deep | -DeepAudit" @(
-    "      Triggers an advanced audit for files containing exactly two unnamed text",
-    "      subtitle tracks with matching codecs. If track headers are ambiguous,",
-    "      it extracts the streams to analyze file size deltas, automatically",
-    "      classifying the smaller track as Signs & Songs and the larger track as",
-    "      Full Dialogue. When executed with the -Fix switch, the script will",
-    "      automatically apply the correct names to the tracks via mkvpropedit.",
-    "      Includes built-in safety margins to skip processing if both tracks",
-    "      are nearly identical in size (e.g., dual Full Dialogue tracks).`n"
+    "      Enables the 'Intelligence Tier' of the auditor. This is designed",
+    "      specifically for files with missing or ambiguous track names.",
+    "      It operates in three distinct stages:",
+    "      1. HEADER PROBE: Checks if internal statistics can resolve the role.",
+    "      2. EXTRACTION: Dumps raw subtitle samples to the TEMP directory.",
+    "      3. ANALYSIS: Compares bitstream character density and file ratios.",
+    "      Files with a size ratio of 2.0x (Text) or 3.0x (Image) are automatically",
+    "      identified; the larger stream is tagged as 'Full Dialogue' and the",
+    "      smaller as 'Signs & Songs'. When combined with -Fix, it will",
+    "      permanently rename the tracks to match these discoveries.`n"
 )
 
-    &$PrintManualBlock "  -DeepSubtitleAuditDebugExtraction | -DSADebugEx | -DeepDebugEx | -DeepAuditDbgEx | -DSADE" @(
-    "      Forces the DSA engine to skip the 'Stage 1 Header Probe' and proceed",
-    "      directly to 'Stage 2 Extraction'. Useful for testing the bitstream",
-    "      size analysis on files with valid headers.`n"
+    &$PrintManualBlock "  -DeepSubtitleAuditDebugExtraction | -DSADE" @(
+    "      Forces the DSA engine to perform a full bitstream extraction even when",
+    "      statistical headers (like NUMBER_OF_FRAMES) are present. While text-based",
+    "      tracks already require extraction for Language Detection, this flag is",
+    "      essential for forcing a physical size check on Image tracks (PGS/VobSub)",
+    "      or when Language Detection is disabled via -NLD.`n"
 )
 
     &$PrintManualBlock "  -DeepSubtitleAuditLanguageDetectionLimit2 | -DSALDL2 | -LDL2" @(
     "      Limits the DSA engine to files containing only 1 or 2 subtitle tracks.",
     "      When active, files with 3 or more subtitles will be skipped entirely",
     "      by the Deep Audit engine.`n"
+)
+
+
+    &$PrintManualBlock "  -DeepSubtitleAuditNOLanguageDetection | -DSANLD | -NLD" @(
+    "      Disables the linguistic probe within the DSA engine. When active,",
+    "      the script will skip checking for Japanese Kana, Hangul, or English",
+    "      honorifics, relying solely on bitstream size ratios to identify",
+    "      dialogue tracks. Useful for speeding up audits on libraries where",
+    "      language tags are already trusted.`n"
 )
     
     Write-Host "`n WESTERN SPECIFIC:`n" -ForegroundColor DarkYellow
@@ -1077,19 +1120,24 @@ function Show-ProjectManual {
     Write-Host "`n ADVANCED & LOG MANAGEMENT FLAGS:`n" -ForegroundColor DarkYellow
 
     &$PrintManualBlock "  -VerifyUpdates | -V | -Verify" @(
-    "      Chains an automated second-pass verification audit immediately after",
-    "      fixing, confirming header adjustments match intent perfectly. Requires -Fix.`n"
+    "      Enables 'Closed-Loop Verification'. Immediately after the fixing",
+    "      phase concludes, the script automatically launches a new audit",
+    "      session targeting the newly created '_updated' files (or the source",
+    "      if -FixNoBackup is active). This second pass confirms that all",
+    "      Mismatch Groups have been resolved and that the resulting headers",
+    "      now perfectly align with your requested configuration.`n"
 )
 
-    &$PrintManualBlock "  -DevDebug | -Dev | -DevD | -DBG | -DDBG" @(
-    "      Global Debugging Switch. Clears standard UI reduction rules to expose",
-    "      low-level automated processes. Specifically surfaces the active system",
-    "      paths discovered for critical backend dependencies (mkvmerge, mkvextract,",
-    "      mkvpropedit, and MediaInfo) during initial script verification. Additionally,",
-    "      it preserves the low-level discovery telemetry on screen by disabling standard",
-    "      console clearing rules when initiating an AVC High 10 Search, triggers real-time",
-    "      terminal tracing for Deep Subtitle Audit (DSA) extraction thresholds, and details",
-    "      the exact arithmetic scoring breakdown applied to every subtitle candidate.`n"
+    &$PrintManualBlock "  -DevDebug | -Dev | -DevD | -DBG" @(
+    "      Exposes the 'Black Box' of the script's internal logic. It disables",
+    "      UI suppression and surfaces detailed telemetry, including:",
+    "      1. TOOL PATHS: Verifies system paths for MKVToolNix and MediaInfo."
+    "      2. SCORING BREAKDOWN: Prints the exact arithmetic used to score",
+    "         every track (e.g., CodecMatch:+100 | Dialogue:+150).",
+    "      3. DSA TRACING: Displays real-time sizing ratios and character",
+    "         counts during Deep Subtitle extractions.",
+    "      4. ERROR LOGGING: Captures raw CLI output from backend tools to",
+    "         troubleshoot corrupted headers or file access issues.`n"
 )
     
     &$PrintManualBlock "  -help | -manual" @(
@@ -1098,8 +1146,10 @@ function Show-ProjectManual {
 )
     
     &$PrintManualBlock "  -DelLog" @(
-    "      Clears all files within the logs directory (MKVMetadataAuditor+Fixer_logs) before",
-    "      starting the operation.`n"
+    "      Performs a 'Fresh Start' by purging the MKVMetadataAuditor+Fixer_logs",
+    "      directory before the scan begins. This is highly recommended when",
+    "      running audits on different libraries to prevent session logs from",
+    "      cluttering the folder and making it difficult to find current results.`n"
 ) -ForceDescColor "DarkRed"
     
     &$PrintManualBlock "  -ClearDefaults | -clr" @(
@@ -1568,38 +1618,58 @@ if ($FixNoBackup) {
     Write-Host " [!] WARNING: Backups are DISABLED. This will overwrite your original files!" -ForegroundColor DarkYellow
 }
 Write-Host "--------------------------------------------------"
+if (-not $NoHwVideoSearch) {
 Write-Host "Config Status: " -NoNewline; Write-Host $configSource -ForegroundColor DarkMagenta
 Write-Host "Config Path:   " -NoNewline; Write-Host $configFile -ForegroundColor DarkGray
+
 Write-Host "--------------------------------------------------"
-Write-Host "LOADED OPTIONS:" -ForegroundColor DarkGreen
-Write-Host "  Video Target: " -NoNewline; Write-Host "$($fixerConfig.Video.TargetLanguage)" -ForegroundColor Blue
-Write-Host "  Audio Target: " -NoNewline; Write-Host "$($fixerConfig.Audio.PreferredLanguage)" -ForegroundColor DarkMagenta
-Write-Host "  Sub Target:   " -NoNewline; Write-Host "$($fixerConfig.Subtitles.PreferredLanguage)" -ForegroundColor Blue
-Write-Host "  Sub Codecs:   " -NoNewline; Write-Host "$($fixerConfig.Subtitles.CodecPriority -join ', ')" -ForegroundColor DarkMagenta
-if ($SubtitleFactorTrackOrder) {
-        Write-Host "  Track Order:  " -NoNewline; Write-Host "Active (-SFTO)" -ForegroundColor Cyan
-    }
-if ($DeepSubtitleAudit) {
-    $dsaDisp = "Active"
-    $dsaFlags = New-Object System.Collections.Generic.List[string]
-    if ($PSBoundParameters.ContainsKey('DeepSubtitleAudit')) { [void]$dsaFlags.Add("Full Pass") }
-    if ($DeepSubtitleAuditDebugExtraction) { [void]$dsaFlags.Add("Forced Extraction") }
-    if ($DeepSubtitleAuditLanguageDetectionLimit2) { [void]$dsaFlags.Add("2-Track Limit") }
-    if ($DeepSubtitleAuditNOLanguageDetection) { [void]$dsaFlags.Add("No Lng Detect") }
+}
+
+$hasOptions = (-not $NoHwVideoSearch) -or ($fast -or $LogFullPath -or $DevDebug)
+if ($hasOptions) {
+    Write-Host "LOADED OPTIONS:" -ForegroundColor DarkGreen
     
-    if ($dsaFlags.Count -gt 0) { $dsaDisp += " ($($dsaFlags -join ' + '))" }
-    Write-Host "  Deep Audit:   " -NoNewline; Write-Host "$dsaDisp" -ForegroundColor Cyan
+    if (-not $NoHwVideoSearch) {
+        Write-Host "  Video Target: " -NoNewline; Write-Host "$($fixerConfig.Video.TargetLanguage)" -ForegroundColor Blue
+        Write-Host "  Audio Target: " -NoNewline; Write-Host "$($fixerConfig.Audio.PreferredLanguage)" -ForegroundColor DarkMagenta
+        Write-Host "  Sub Target:   " -NoNewline; Write-Host "$($fixerConfig.Subtitles.PreferredLanguage)" -ForegroundColor Blue
+        Write-Host "  Sub Codecs:   " -NoNewline; Write-Host "$($fixerConfig.Subtitles.CodecPriority -join ', ')" -ForegroundColor DarkMagenta
+        
+        if ($SubtitleFactorTrackOrder) {
+            Write-Host "  Track Order:  " -NoNewline; Write-Host "Active (-SFTO)" -ForegroundColor Cyan
+        }
+        
+        if ($DeepSubtitleAudit) {
+            $dsaDisp = "Active"
+            $dsaFlags = New-Object System.Collections.Generic.List[string]
+            if ($PSBoundParameters.ContainsKey('DeepSubtitleAudit')) { [void]$dsaFlags.Add("Full Pass") }
+            if ($DeepSubtitleAuditDebugExtraction) { [void]$dsaFlags.Add("Forced Extraction") }
+            if ($DeepSubtitleAuditLanguageDetectionLimit2) { [void]$dsaFlags.Add("2-Track Limit") }
+            if ($DeepSubtitleAuditNOLanguageDetection) { [void]$dsaFlags.Add("No Lng Detect") }
+            
+            if ($dsaFlags.Count -gt 0) { $dsaDisp += " ($($dsaFlags -join ' + '))" }
+            Write-Host "  Deep Audit:   " -NoNewline; Write-Host "$dsaDisp" -ForegroundColor Cyan
+        }
+
+        if ($Honorifics) {
+            Write-Host "  Honorifics:   " -NoNewline; Write-Host "$(if ($Honorifics) { "On" } else { "Off" })" -ForegroundColor Blue
+        }
+
+        if ($fixerConfig.Subtitles.FansubGroupPriority -and $fixerConfig.Subtitles.FansubGroupPriority.Count -gt 0) {
+            Write-Host "  Fansub Pref:  " -NoNewline; Write-Host "$($fixerConfig.Subtitles.FansubGroupPriority -join ', ')" -ForegroundColor Cyan
+        }
+    }
+
+    if ($NoHwVideoSearch) {
+        if ($Fast) { Write-Host "  Fast Mode:    " -NoNewline; Write-Host "On (-fast)" -ForegroundColor Magenta }
+        if ($LogFullPath) { Write-Host "  Full Path Log:" -NoNewline; Write-Host "On (-lfp)" -ForegroundColor DarkCyan  }
+    }
+
+    if ($DevDebug) { Write-Host "  Global Debug: " -NoNewline; Write-Host "Active (-Dev)" -ForegroundColor DarkYellow }
+    
+    Write-Host "--------------------------------------------------"
 }
-if ($DevDebug) {
-    Write-Host "  Global Debug: " -NoNewline; Write-Host "Active (-Dev)" -ForegroundColor DarkYellow
-}
-if ($Honorifics) {
-    Write-Host "  Honorifics:   " -NoNewline; Write-Host "$(if ($Honorifics) { "On" } else { "Off" })" -ForegroundColor Blue
-}
-if ($fixerConfig.Subtitles.FansubGroupPriority -and $fixerConfig.Subtitles.FansubGroupPriority.Count -gt 0) {
-    Write-Host "  Fansub Pref:  " -NoNewline; Write-Host "$($fixerConfig.Subtitles.FansubGroupPriority -join ', ')" -ForegroundColor Cyan
-}
-Write-Host "--------------------------------------------------"
+
 #Write-Host "Script Location: " -NoNewline; Write-Host "$PSScriptRoot" -ForegroundColor DarkYellow
 #Write-Host "--------------------------------------------------"
 # [CHANGE] v2026.05.14_19.14.00 - Accurate UI Exclusion Count
@@ -1666,11 +1736,11 @@ Write-Host "--------------------------------------------------"
 
 # Determine Start Message
 $startMessage = if ($NoHwVideoSearch -and $Fast -and $LogFullPath) { 
-    "Begin NoHW Video Search Fast with Log Full File Path?" 
+    "Begin NoHW Search (Fast) with Full Path Logging?" 
 } elseif ($NoHwVideoSearch -and $Fast) { 
     "Begin NoHW Video Search Fast?"
 } elseif ($NoHwVideoSearch) { 
-    "Begin NoHW Video Search?"
+    "Begin NoHW Search?"
 } elseif ($Fix -and $FixNoBackup -and $VerifyUpdates) { 
     "Begin Auditing and Fixing with NO BACKUP then Verify?"    
 } elseif ($Fix -and $FixNoBackup) { 
