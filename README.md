@@ -64,6 +64,8 @@ Beyond standard metadata auditing, the suite includes a specialized compatibilit
 | `-FansubGroupPriority \| -fg <string>` | Sets preferred fansub groups for subtitle track prioritization (e.g., `-fg 'commie'`). |
 | `-DeepSubtitleAudit \| -DSA \| -Deep` | **Intelligence Tier:** Uses a 3-stage process (Header Probe, Extraction, Bitstream Analysis) to resolve ambiguous track names. Automatically identifies 'Full Dialogue' vs 'Signs & Songs' via file size ratios (2.0x for text / 3.0x for image). |
 | `-DeepSubtitleAuditDebugExtraction \| -DSADE` | Forces the DSA engine to skip the 'Header Probe' and proceed directly to physical bitstream extraction. Required for forcing size checks on image-based tracks. |
+| `-DeepSubtitleAuditLanguageDetectionLimit2 \| -DSALDL2 \| -LDL2` | **Complexity Gate:** Limits the DSA engine to processing files with exactly 1 or 2 subtitle tracks. Files with 3 or more tracks are skipped entirely to prevent incorrect role assignment in complex containers. |
+| `-DeepSubtitleAuditNOLanguageDetection \| -DSANLD \| -NLD` | **Manual Bitstream Analysis:** Disables linguistic probing. Bypasses language detection (Japanese/English Honorifics) and relies exclusively on file size ratios to resolve track roles. |
 | `-SubtitlesHearingImpaired \| -sdh \| -hi \| -hicc \| -cc` | Prioritizes 'Hearing Impaired' or 'SDH' subtitle tracks (Western Mode). |
 | `-OverrideWesternDefaults \| -ovrdw` | Allows the script to save custom Western mode parameters to the JSON configuration. |
 
@@ -95,4 +97,4 @@ Beyond standard metadata auditing, the suite includes a specialized compatibilit
 ---
 > **Document Control**  
 > *This document is up-to-date with the following version of MKVMetadataAuditor+Fixer.*  
-> *2026.06.10__14.59.00*
+> *2026.06.10__15.36.00*
