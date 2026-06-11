@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: MKVMetadataAuditor+Fixer.ps1
-# VERSION: 2026.06.10__20.46.00
+# VERSION: 2026.06.10__21.36.00
 # TARGET: PowerShell 7.6.2 LTS
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -128,7 +128,7 @@ if ($FixNoBackup) { $Fix = $true }
 if ($DeepSubtitleAuditDebugExtraction -or $DeepSubtitleAuditLanguageDetectionLimit2 -or $DeepSubtitleAuditNOLanguageDetection) { $DeepSubtitleAudit = $true }
 
 # --- GLOBAL VERSION DEFINITION ---
-$scriptVersion = "2026.06.10__20.46.00"
+$scriptVersion = "2026.06.10__21.36.00"
 
 # --- VERSION REPORTER ---
 if ($Version) {
@@ -290,10 +290,20 @@ function Test-IsNoHw {
         return [PSCustomObject]@{ IsNoHw = $false; IsReadable = $false; Error = "File Not Found" }
     }
 
+    # Convert to Extended-Length Path to bypass the Windows 260-character limit for external CLI tools
+    $miFilePath = $FilePath
+    if ($FilePath -notlike "\\?\*") {
+        if ($FilePath.StartsWith("\\")) {
+            $miFilePath = "\\?\UNC\" + $FilePath.Substring(2)
+        } else {
+            $miFilePath = "\\?\" + $FilePath
+        }
+    }
+
     $genFormat = ""
     try {
         # Get multiple fields at once to minimize CLI overhead and verify file structure
-        $raw = & $MediaInfoPath --Inform="General;%Format%|%VideoCount%|%FileExtension%" "$FilePath"
+        $raw = & $MediaInfoPath --Inform="General;%Format%|%VideoCount%|%FileExtension%" "$miFilePath"
         if ($raw -is [array]) { $raw = $raw[0] }
         $parts = "$raw".Split('|')
         
@@ -313,7 +323,7 @@ function Test-IsNoHw {
         }
 
         # 3. Extraction: Get specific NoHW compatibility metrics
-        $miRaw = & $MediaInfoPath --Inform="Video;%ChromaSubsampling%|%ColorSpace%|%Format_Profile%|%Format%" "$FilePath"
+        $miRaw = & $MediaInfoPath --Inform="Video;%ChromaSubsampling%|%ColorSpace%|%Format_Profile%|%Format%" "$miFilePath"
         if ($miRaw -is [array]) { $miRaw = $miRaw[0] }
         $m = "$miRaw".Split('|')
         
@@ -582,7 +592,16 @@ function Get-AuditFlags {
     
         # --- DEEP VIDEO INSPECTION (NoHW Flags) ---
     if (Test-Path -LiteralPath $MediaInfoPath) {
-        $miRaw = & $MediaInfoPath --Inform="Video;%ChromaSubsampling%|%ColorSpace%|%Format_Profile%|%Format%" "$FilePath"
+        # Convert to Extended-Length Path to bypass the Windows 260-character limit for external CLI tools
+        $miFilePath = $FilePath
+        if ($FilePath -notlike "\\?\*") {
+            if ($FilePath.StartsWith("\\")) {
+                $miFilePath = "\\?\UNC\" + $FilePath.Substring(2)
+            } else {
+                $miFilePath = "\\?\" + $FilePath
+            }
+        }
+        $miRaw = & $MediaInfoPath --Inform="Video;%ChromaSubsampling%|%ColorSpace%|%Format_Profile%|%Format%" "$miFilePath"
         if ($miRaw -is [array]) { $miRaw = $miRaw[0] }
         $m = "$miRaw".Split('|')
         
