@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: MKVMetadataAuditor+Fixer.ps1
-# VERSION: 2026.06.10__15.36.00
+# VERSION: 2026.06.10__20.46.00
 # TARGET: PowerShell 7.6.2 LTS
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -128,7 +128,7 @@ if ($FixNoBackup) { $Fix = $true }
 if ($DeepSubtitleAuditDebugExtraction -or $DeepSubtitleAuditLanguageDetectionLimit2 -or $DeepSubtitleAuditNOLanguageDetection) { $DeepSubtitleAudit = $true }
 
 # --- GLOBAL VERSION DEFINITION ---
-$scriptVersion = "2026.06.10__15.36.00"
+$scriptVersion = "2026.06.10__20.46.00"
 
 # --- VERSION REPORTER ---
 if ($Version) {
@@ -2027,7 +2027,8 @@ foreach ($folderPath in $targetFolders) {
         # CHECK TIMER: If 60 seconds passed, flush session results to disk for data safety
         if (([DateTime]::Now - $lastFlushTime).TotalSeconds -ge 60 -and $sessionNoHwList.Count -gt 0) {
             Write-Host " [i] 60s Elapsed: Flushing discoveries to disk for safety..." -ForegroundColor Cyan
-            $sessionNoHwList | Out-File -LiteralPath $noHwLog -Append -Encoding utf8
+            # Use .NET AppendAllLines to guarantee one entry per line, bypassing PS formatting
+            [System.IO.File]::AppendAllLines($noHwLog, [string[]]$sessionNoHwList)
             $sessionNoHwList.Clear()
             $lastFlushTime = [DateTime]::Now
         }
@@ -3173,12 +3174,29 @@ if ($NoHwVideoSearch) {
     if ($sessionNoHwList.Count -gt 0) { $remaining = $sessionNoHwList.ToArray() }
 
     # 2. Read existing discoveries from disk (skipping our placeholder lines)
+    # Force Get-Content to return an array even for 1-line files to prevent String + Array concatenation
     $diskContent = if (Test-Path $noHwLog) { 
-        Get-Content -LiteralPath $noHwLog | Where-Object { $_ -notmatch "^--- SCAN IN PROGRESS ---$|^Results will be finalized" } 
+        @(Get-Content -LiteralPath $noHwLog) | Where-Object { $_ -notmatch "^--- SCAN IN PROGRESS ---$|^Results will be finalized" } 
     } else { @() }
 
-    # 3. Combine everything
-    $allResults = @($diskContent + $remaining) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+    # Combine lists safely using .AddRange to maintain individual line integrity
+    $combinedList = New-Object System.Collections.Generic.List[string]
+    if ($diskContent) { $combinedList.AddRange([string[]]$diskContent) }
+    if ($remaining)   { $combinedList.AddRange([string[]]$remaining) }
+    
+    $allResults = $combinedList | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique
+    # Apply Natural Sort (Windows Explorer Logic) to the file paths/errors
+    if ($allResults.Count -gt 1) {
+        $allResultsArray = [string[]]$allResults
+        [System.Array]::Sort($allResultsArray, [System.Comparison[string]]{ 
+            param($a, $b)
+            # Strip prefixes/suffixes to get the raw path for sorting comparison only
+            $cleanA = $a -replace '^💀 \[ERROR\] UNREADABLE: ', '' -replace ' - Reason: .*$', ''
+            $cleanB = $b -replace '^💀 \[ERROR\] UNREADABLE: ', '' -replace ' - Reason: .*$', ''
+            [NaturalSort]::StrCmpLogicalW($cleanA, $cleanB) 
+        })
+        $allResults = $allResultsArray
+    }
 
     if ($allResults.Count -gt 0) {
         $finalOutput = New-Object System.Collections.Generic.List[string]
@@ -3187,7 +3205,8 @@ if ($NoHwVideoSearch) {
         $finalOutput.AddRange([string[]]$allResults)
         
         # 4. Perform the final surgical overwrite
-        $finalOutput | Out-File -LiteralPath $noHwLog -Encoding utf8
+        # Use .NET WriteAllLines to bypass PowerShell's formatting engine entirely
+        [System.IO.File]::WriteAllLines($noHwLog, [string[]]$finalOutput, [System.Text.Encoding]::UTF8)
     }
 }
 
