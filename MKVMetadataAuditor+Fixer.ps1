@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: MKVMetadataAuditor+Fixer.ps1
-# VERSION: 2026.06.12__12.07.54
+# VERSION: 2026.06.12__17.39.00
 # TARGET: PowerShell 7.6.2 LTS
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -128,7 +128,7 @@ if ($FixNoBackup) { $Fix = $true }
 if ($DeepSubtitleAuditDebugExtraction -or $DeepSubtitleAuditLanguageDetectionLimit2 -or $DeepSubtitleAuditNOLanguageDetection) { $DeepSubtitleAudit = $true }
 
 # --- GLOBAL VERSION DEFINITION ---
-$scriptVersion = "2026.06.12__12.07.54"
+$scriptVersion = "2026.06.12__17.39.00"
 
 # --- VERSION REPORTER ---
 if ($Version) {
@@ -1458,6 +1458,38 @@ if (($null -eq $PathParts -or $PathParts.Count -eq 0) -and -not ($DelLog -or $Cl
     }
 }
 
+# --- THROTTLE LIMIT AUTO-TUNING ---
+$script:OptimalThrottleLimit = 4 # Default safe middle-ground
+try {
+    if ($inputPaths.Count -gt 0) {
+        $targetDrive = $inputPaths[0]
+        if ($targetDrive.StartsWith("\\")) {
+            $script:OptimalThrottleLimit = 3 # Network share (UNC path)
+        } else {
+            $rootPath = [System.IO.Path]::GetPathRoot($targetDrive)
+            $driveInfo = [System.IO.DriveInfo]::new($rootPath)
+            if ($driveInfo.DriveType -eq "Network") {
+                $script:OptimalThrottleLimit = 3 # Mapped network drive
+            } else {
+                # Local Drive: Query physical media type on Windows
+                if ($PSVersionTable.Platform -eq "Windows") {
+                    $disks = Get-PhysicalDisk -ErrorAction SilentlyContinue
+                    if ($disks) {
+                        $targetMediaType = $disks | Select-Object -ExpandProperty MediaType -Unique
+                        if ($targetMediaType -contains "SSD") {
+                            $script:OptimalThrottleLimit = ([Environment]::ProcessorCount) # SSD: Full scaling
+                        } elseif ($targetMediaType -contains "HDD") {
+                            $script:OptimalThrottleLimit = 2 # HDD: Minimize thrashing
+                        }
+                    }
+                }
+            }
+        }
+    }
+} catch {
+    $script:OptimalThrottleLimit = 4
+}
+
 # --- LOG FOLDER DEFINITION & CLEANUP ---
 # Define all directory variables
 $rootLog = Join-Path $PSScriptRoot "MKVMetadataAuditor+Fixer_logs"
@@ -1942,7 +1974,6 @@ function Write-InlineProgress {
     $left = $width - $done
     
     $bar = ("█" * $done) + ("░" * $left)
-    # Using ${Message} ensures the colon is treated as plain text
     # Time Calculations
     $elapsed = [DateTime]::Now - $script:SessionStartTime
     $te = "{0:hh\:mm\:ss}" -f $elapsed
@@ -1954,10 +1985,15 @@ function Write-InlineProgress {
         $tr = "{0:hh\:mm\:ss}" -f [TimeSpan]::FromSeconds($remainingSecs)
     }
 
-    # [FIX] v2026.06.12_11.32.00 - Added TE/TR (Time Elapsed / Estimated Time Remaining)
-    $progressLine = "[SHIELD] ${Message}: [$bar] $percent% ($Current/$Total) | TE: $te | ETR: $tr".PadRight(120)
+    # Adaptive splitting for long descriptions to prevent terminal wrapping
+    if ($Message -match '^(.*?)\s*(\(.*)$') {
+        $line1 = "         " + $Matches[1]
+        $line2 = "[SHIELD] " + $Matches[2]
+        $progressLine = "$line1`r`n${line2}: [$bar] $percent% ($Current/$Total) | TE: $te | ETR: $tr"
+    } else {
+        $progressLine = "[SHIELD] ${Message}: [$bar] $percent% ($Current/$Total) | TE: $te | ETR: $tr"
+    }
 
-    
     Write-Host "`n$progressLine`n" -ForegroundColor Cyan
 }
 
@@ -2100,76 +2136,95 @@ foreach ($folderPath in $targetFolders) {
     $propPadding = 9
     
     # NoHW Video SCAN (MediaInfo)
-    # This runs BEFORE the auditor/grouping logic so it actually sees the files
-    # --- SEARCH LOGIC (NoHW Compatibility Engine) ---
+        # This runs BEFORE the auditor/grouping logic so it actually sees the files
+        # --- SEARCH LOGIC (NoHW Compatibility Engine) ---
 
-    
-    # v2026.05.13_16.08.00 - Finalized Spacing & One-Time Fast Header
-    if ($NoHwVideoSearch) {
-        $scanFiles = if ($fast) { $mkvFiles | Select-Object -First 1 } else { $mkvFiles }
-        $foundFlags = New-Object System.Collections.Generic.HashSet[string]
         
-        foreach ($f in $scanFiles) {
-            $sessionProgressIndex++
-            if ($sessionProgressIndex % 10 -eq 0 -or $sessionProgressIndex -eq $totalSessionItems) {
-                $statusMsg = if ($fast) { "Processing Folders" } else { "Processing Files" }
-                Write-InlineProgress -Current $sessionProgressIndex -Total $totalSessionItems -Message $statusMsg
-            }
+        # v2026.05.13_16.08.00 - Finalized Spacing & One-Time Fast Header
+        if ($NoHwVideoSearch) {
+            $scanFiles = if ($fast) { $mkvFiles | Select-Object -First 1 } else { $mkvFiles }
+            $foundFlags = New-Object System.Collections.Generic.HashSet[string]
             
-            if ($DevDebug) { 
-                Write-Host "`n [DevDebug-NoHW] File Path: $($f.FullName)" -ForegroundColor Gray
-                Write-Host " [DevDebug-NoHW] File Name: $($f.Name)" -ForegroundColor DarkGray
-            }
+            # Extract functions as scriptblocks for child runspaces (as stateless string)
+            $testIsNoHwDef = [string]${function:Test-IsNoHw}
 
-            $status = Test-IsNoHw -FilePath $f.FullName -MediaInfoPath $mediainfo
-            
-            if ($DevDebug) {
-                if (-not $status.IsReadable) { 
-                    Write-Host " [DevDebug-NoHW] Status: ERROR | $($status.Error)" -ForegroundColor Red 
-                } else {
-                    Write-Host " [DevDebug-NoHW] Status: $($status.Format) | $($status.Profile) | $($status.Chroma) | $($status.Space)" -ForegroundColor Gray
+            # Run slow MediaInfo scans in parallel
+            $parallelResults = $scanFiles | ForEach-Object -Parallel {
+                $f = $_
+                $mediainfoDllPath = $using:mediainfoDll
+                $testIsNoHwSb = [scriptblock]::Create($using:testIsNoHwDef)
+                
+                $status = &$testIsNoHwSb -FilePath $f.FullName -MediaInfoPath $mediainfoDllPath
+                
+                [PSCustomObject]@{
+                    FullName = $f.FullName
+                    Name     = $f.Name
+                    Status   = $status
+                }
+            } -ThrottleLimit $script:OptimalThrottleLimit
+
+            # Sequentially process results to guarantee accurate sorting, logs, and console highlights
+            foreach ($res in $parallelResults) {
+                $sessionProgressIndex++
+                if ($sessionProgressIndex % 10 -eq 0 -or $sessionProgressIndex -eq $totalSessionItems) {
+                    $statusMsg = if ($fast) { "Processing Folders" } else { "Processing Files" }
+                    Write-InlineProgress -Current $sessionProgressIndex -Total $totalSessionItems -Message $statusMsg
+                }
+                
+                if ($DevDebug) { 
+                    Write-Host "`n [DevDebug-NoHW] File Path: $($res.FullName)" -ForegroundColor Gray
+                    Write-Host " [DevDebug-NoHW] File Name: $($res.Name)" -ForegroundColor DarkGray
+                }
+
+                $status = $res.Status
+                
+                if ($DevDebug) {
+                    if (-not $status.IsReadable) { 
+                        Write-Host " [DevDebug-NoHW] Status: ERROR | $($status.Error)" -ForegroundColor Red 
+                    } else {
+                        Write-Host " [DevDebug-NoHW] Status: $($status.Format) | $($status.Profile) | $($status.Chroma) | $($status.Space)" -ForegroundColor Gray
+                    }
+                }
+
+                if (-not $status.IsReadable) {
+                    $corruptCount++
+                    [void]$foundFlags.Add("💀[Corrupt/No Tracks Found]")
+                    $errPath = if ($fast -and -not $LogFullPath) { $folderPath.FullName.TrimEnd('\') } else { $res.FullName }
+                    $noHwList.Add("💀 [ERROR] UNREADABLE: $errPath - Reason: $($status.Error)")
+                    Write-Host "`n  [!] CORRUPT/UNREADABLE FILE FOUND: $($res.Name)" -ForegroundColor DarkRed
+                }
+                elseif ($status.IsNoHw) {
+                    $noHwCount++
+                    
+                    # Collect Detected Flags for the Folder Entry
+                    if ($status.Flags -match "Hi10P") { [void]$foundFlags.Add("🔟[NoHW: AVC Hi10P]") }
+                    if ($status.Flags -match "4:2:2") { [void]$foundFlags.Add("🎨[NoHW: Chroma 4:2:2]") }
+                    if ($status.Flags -match "4:4:4") { [void]$foundFlags.Add("🎨[NoHW: Chroma 4:4:4]") }
+                    if ($status.Flags -match "RGB")   { [void]$foundFlags.Add("🌈[NoHW: RGB]") }
+
+                    $entryToAdd = if ($fast -and -not $LogFullPath) { $folderPath.FullName.TrimEnd('\') } else { $res.FullName }
+                    $noHwList.Add($entryToAdd)
+                    
+                    Write-Host "`n  [!] Found NoHW ($($status.Flags)): $($res.Name)" -ForegroundColor DarkYellow
                 }
             }
+            # Dynamic Session Aggregation
+            foreach ($flag in $foundFlags) { [void]$sessionFlags.Add($flag) }
+            foreach ($item in $noHwList)   { $sessionNoHwList.Add($item) }
+            $noHwList.Clear()
+            Write-Host "" # Clears the inline progress line
 
-            if (-not $status.IsReadable) {
-                $corruptCount++
-                [void]$foundFlags.Add("💀[Corrupt/No Tracks Found]")
-                $errPath = if ($fast -and -not $LogFullPath) { $folderPath.FullName.TrimEnd('\') } else { $f.FullName }
-                $noHwList.Add("💀 [ERROR] UNREADABLE: $errPath - Reason: $($status.Error)")
-                Write-Host "`n  [!] CORRUPT/UNREADABLE FILE FOUND: $($f.Name)" -ForegroundColor DarkRed
+            # CHECK TIMER: If 60 seconds passed, flush session results to disk for data safety
+            if (([DateTime]::Now - $lastFlushTime).TotalSeconds -ge 60 -and $sessionNoHwList.Count -gt 0) {
+                Write-Host " [i] 60s Elapsed: Flushing discoveries to disk for safety..." -ForegroundColor Cyan
+                # Use .NET AppendAllLines to guarantee one entry per line, bypassing PS formatting
+                [System.IO.File]::AppendAllLines($noHwLog, [string[]]$sessionNoHwList)
+                $sessionNoHwList.Clear()
+                $lastFlushTime = [DateTime]::Now
             }
-            elseif ($status.IsNoHw) {
-                $noHwCount++
-                
-                # Collect Detected Flags for the Folder Entry
-                if ($status.Flags -match "Hi10P") { [void]$foundFlags.Add("🔟[NoHW: AVC Hi10P]") }
-                if ($status.Flags -match "4:2:2") { [void]$foundFlags.Add("🎨[NoHW: Chroma 4:2:2]") }
-                if ($status.Flags -match "4:4:4") { [void]$foundFlags.Add("🎨[NoHW: Chroma 4:4:4]") }
-                if ($status.Flags -match "RGB")   { [void]$foundFlags.Add("🌈[NoHW: RGB]") }
 
-                $entryToAdd = if ($fast -and -not $LogFullPath) { $folderPath.FullName.TrimEnd('\') } else { $f.FullName }
-                $noHwList.Add($entryToAdd)
-                
-                Write-Host "`n  [!] Found NoHW ($($status.Flags)): $($f.Name)" -ForegroundColor DarkYellow
-            }
+            continue 
         }
-        # Dynamic Session Aggregation
-        foreach ($flag in $foundFlags) { [void]$sessionFlags.Add($flag) }
-        foreach ($item in $noHwList)   { $sessionNoHwList.Add($item) }
-        $noHwList.Clear()
-        Write-Host "" # Clears the inline progress line
-
-        # CHECK TIMER: If 60 seconds passed, flush session results to disk for data safety
-        if (([DateTime]::Now - $lastFlushTime).TotalSeconds -ge 60 -and $sessionNoHwList.Count -gt 0) {
-            Write-Host " [i] 60s Elapsed: Flushing discoveries to disk for safety..." -ForegroundColor Cyan
-            # Use .NET AppendAllLines to guarantee one entry per line, bypassing PS formatting
-            [System.IO.File]::AppendAllLines($noHwLog, [string[]]$sessionNoHwList)
-            $sessionNoHwList.Clear()
-            $lastFlushTime = [DateTime]::Now
-        }
-
-        continue 
-    }
 
     # --- TABLE PRINTING FUNCTION ---
     $script:PrintTable = [scriptblock]{
@@ -2188,11 +2243,37 @@ foreach ($folderPath in $targetFolders) {
         $mkvCount = $mkvFiles.Count
         $orderedGroups = New-Object System.Collections.Generic.List[PSObject]
         
+        # Prepare helper function block for external runspaces (as stateless string)
+        $testIsNoHwDef = [string]${function:Test-IsNoHw}
+        $analyzerMsg = if ($CurrentJob.Mode -eq "Verification") { "Verifying Updates" } else { "Analyzing Files" }
+        Write-InlineProgress -Current 0 -Total $mkvCount -Message "$analyzerMsg (Parallel Probe)"
+
+        # Run heavy probes in parallel
+        $probeResults = $mkvFiles | ForEach-Object -Parallel {
+            $f = $_
+            $mkvmergePath = $using:mkvmerge
+            $mediainfoDllPath = $using:mediainfoDll
+            $testIsNoHwSb = [scriptblock]::Create($using:testIsNoHwDef)
+
+            $json = & $mkvmergePath -J $f.FullName | ConvertFrom-Json
+            $noHwStatus = &$testIsNoHwSb -FilePath $f.FullName -MediaInfoPath $mediainfoDllPath
+
+            [PSCustomObject]@{
+                FullName   = $f.FullName
+                Json       = $json
+                NoHwStatus = $noHwStatus
+            }
+        } -ThrottleLimit $script:OptimalThrottleLimit
+
+        # Create a fast lookup map from our parallel probe
+        $probeMap = @{}
+        foreach ($res in $probeResults) {
+            $probeMap[$res.FullName] = $res
+        }
+
+        # Sequentially map groups to preserve absolute alphabetical sorting
         for ($i = 0; $i -lt $mkvCount; $i++) {
             $f = $mkvFiles[$i]
-            # 1. Update the user with the progress bar immediately
-            # [FIX] v2026.06.02_22.09.00 - Assign mode message string for analyzer
-            $analyzerMsg = if ($CurrentJob.Mode -eq "Verification") { "Verifying Updates" } else { "Analyzing Files" }
             Write-InlineProgress -Current ($i + 1) -Total $mkvCount -Message $analyzerMsg
             
             if ($DevDebug) {
@@ -2203,11 +2284,13 @@ foreach ($folderPath in $targetFolders) {
             # 2. Log path to file
             $f.FullName | Out-File $pathLog -Append -Encoding utf8
             
-            # 3. Get JSON and build signature
-            $json = & $mkvmerge -J $f.FullName | ConvertFrom-Json
+            # 3. Retrieve pre-probed data instantly from memory
+            $cached = $probeMap[$f.FullName]
+            $json = $cached.Json
+            $noHwStatus = $cached.NoHwStatus
+
             $f | Add-Member -NotePropertyName "PristineJson" -NotePropertyValue $json -Force
-            # [FIX] v2026.06.10 - Incorporate NoHW Profile into signature to force unique grouping
-            $noHwStatus = Test-IsNoHw -FilePath $f.FullName -MediaInfoPath $mediainfoDll
+            
             Get-AuditSelector -Reset
             $sig = (($json.tracks | ForEach-Object { 
                 $p = $_.properties
@@ -2225,7 +2308,7 @@ foreach ($folderPath in $targetFolders) {
             
             # --- SEPARATE NOHW VIDEO SEARCH ---
             if ($NoHwVideoSearch -and (Test-Path -LiteralPath $mediainfoDll)) {
-                $status = Test-IsNoHw -FilePath $f.FullName -MediaInfoPath $mediainfoDll
+                $status = $noHwStatus
                 if ($status.IsNoHw) {
                     $noHwCount++
                     $noHwList.Add($f.FullName)
@@ -2412,6 +2495,195 @@ foreach ($folderPath in $targetFolders) {
                 $entry | Out-File $missLog -Append -Encoding utf8
             }
         } # <--- END GROUPS LOOP
+
+        # --- PARALLEL DSA PRE-CALCULATION PHASE ---
+        $dsaLookupMap = @{}
+        if ($DeepSubtitleAudit) {
+            $parentGlobalTemp = $script:GlobalTemp
+            $getSubtitleExtensionDef = [string]${function:Get-SubtitleExtension}
+            $extractDialogueTextDef = [string]${function:Extract-DialogueText}
+            $detectSubtitleLanguageDef = [string]${function:Detect-SubtitleLanguage}
+
+            Write-InlineProgress -Current 0 -Total $mkvCount -Message "Deep Subtitle Analysis (Parallel)"
+
+            $dsaParallelResults = $mkvFiles | ForEach-Object -Parallel {
+                $f = $_
+                $mkvextractPath = $using:mkvextract
+                
+                # Setup localized, thread-safe memory logging buffer
+                $script:LocalLogsList = [System.Collections.Generic.List[PSCustomObject]]::new()
+                
+                # Define local proxy to intercept and silence background thread outputs
+                function Write-Host {
+                    param(
+                        [Parameter(ValueFromRemainingArguments=$true)]$Message,
+                        [string]$ForegroundColor = "White"
+                    )
+                    $script:LocalLogsList.Add([PSCustomObject]@{
+                        Text  = ($Message -join ' ')
+                        Color = $ForegroundColor
+                    })
+                }
+
+                # Configuration variables passed into the runspace
+                $dsaLimit2 = $using:DeepSubtitleAuditLanguageDetectionLimit2
+                $dsaDebugEx = $using:DeepSubtitleAuditDebugExtraction
+                $dsaNoLng = $using:DeepSubtitleAuditNOLanguageDetection
+                $honorificsActive = $using:Honorifics
+                $globalTempPath = $using:parentGlobalTemp
+                $devDebugActive = $using:DevDebug
+
+                # Pull parsed JSON already attached to the file object
+                $json = $f.PristineJson
+
+                $dsaResult = $null
+                $getExtSb = [scriptblock]::Create($using:getSubtitleExtensionDef)
+                $extractDialogueSb = [scriptblock]::Create($using:extractDialogueTextDef)
+                $detectLanguageSb = [scriptblock]::Create($using:detectSubtitleLanguageDef)
+
+                $allSubs = @($json.tracks | Where-Object { $_.type -eq "subtitles" })
+                if ($allSubs.Count -ge 1) {
+                    $isLdl2Restricted = ($dsaLimit2 -and $allSubs.Count -gt 2)
+                    if (-not $isLdl2Restricted) {
+                        $weights = @{}
+                        $detectedLangs = @{}
+                        $isResolved = $false
+                        $targetRatio = 3.0
+
+                        # [Stage 2.1] Header Probing Phase (Fast Path)
+                        $isImgProbe = ($allSubs[0].codec -match "pgs|vobsub")
+                        $skipHeaderForLngDetect = (-not $dsaNoLng -and -not $isImgProbe)
+
+                        if ($devDebugActive -and $skipHeaderForLngDetect -and $allSubs.Count -eq 2) {
+                            Write-Host "  [DevDebug-DSA] Header Probe Bypassed: Text extraction required for Language Detection (-NLD is not active)." -ForegroundColor DarkCyan
+                        }
+
+                        if ($allSubs.Count -eq 2 -and -not $dsaDebugEx -and -not $skipHeaderForLngDetect) {
+                            $h1 = if ($allSubs[0].properties.tag_number_of_frames) { [int64]$allSubs[0].properties.tag_number_of_frames } 
+                                  elseif ($allSubs[0].properties.statistics_tags.NUMBER_OF_FRAMES) { [int64]$allSubs[0].properties.statistics_tags.NUMBER_OF_FRAMES } else { 0 }
+                            $h2 = if ($allSubs[1].properties.tag_number_of_frames) { [int64]$allSubs[1].properties.tag_number_of_frames } 
+                                  elseif ($allSubs[1].properties.statistics_tags.NUMBER_OF_FRAMES) { [int64]$allSubs[1].properties.statistics_tags.NUMBER_OF_FRAMES } else { 0 }
+                            
+                            $isDualEngHeader = ($allSubs[0].properties.language -eq "eng" -and $allSubs[1].properties.language -eq "eng")
+
+                            if ($h1 -gt 0 -and $h2 -gt 0 -and $isDualEngHeader) {
+                                $hRatio = [Math]::Max($h1, $h2) / [Math]::Max(1, [Math]::Min($h1, $h2))
+                                if ($hRatio -ge $targetRatio) {
+                                    $weights[$allSubs[0].id] = $h1
+                                    $weights[$allSubs[1].id] = $h2
+                                    $isResolved = $true
+                                }
+                            }
+                        }
+
+                        # [Stage 2.2] Subtitle Extraction Phase (Slow Path)
+                        if (-not $isResolved) {
+                            # Guarantee unique workspace per thread to avoid race conditions
+                            $tempDir = Join-Path $globalTempPath "DSA_Probe_Parallel_$($f.FullName.GetHashCode().ToString('X'))"
+                            if (Test-Path $tempDir) { Remove-Item $tempDir -Recurse -Force -ErrorAction SilentlyContinue }
+                            New-Item -Path $tempDir -ItemType Directory | Out-Null
+                            
+                            $extractArgs = New-Object System.Collections.Generic.List[string]
+                            $probeMap = @{}
+                            foreach ($sub in $allSubs) {
+                                $isImageSub = ($sub.codec -match "PGS|VobSub")
+                                if ($isImageSub -and $allSubs.Count -gt 2) { continue }
+                                
+                                $ext = &$getExtSb -Codec $sub.codec
+                                $tmpPath = Join-Path $tempDir "track$($sub.id + 1).$ext"
+                                $extractArgs.Add("$($sub.id):$tmpPath")
+                                $probeMap[$sub.id] = $tmpPath
+                            }
+                            
+                            if ($extractArgs.Count -gt 0) {
+                                if ($devDebugActive) {
+                                    Write-Host "  [DevDebug-DSA] Extracting $($extractArgs.Count) tracks for analysis..." -ForegroundColor DarkCyan
+                                }
+                                & $mkvextractPath "$($f.FullName)" tracks @extractArgs | Out-Null
+                            }
+                            
+                            foreach ($sub in $allSubs) {
+                                $probeFile = $probeMap[$sub.id]
+                                if ($null -ne $probeFile -and (Test-Path -LiteralPath $probeFile)) {
+                                    $isImageSub = ($sub.codec -match "PGS|VobSub")
+                                    if (-not $isImageSub) {
+                                        $maxNeeded = [int]::MaxValue
+                                        if ($allSubs.Count -eq 1) {
+                                            $maxNeeded = if ($dsaNoLng) { 1500 } else { 15000 }
+                                        } elseif ($allSubs.Count -gt 2) {
+                                            $maxNeeded = 15000
+                                        }
+                                        $cleanText = &$extractDialogueSb -Path $probeFile -OutPath $null -DevDebug:$devDebugActive -MaxLength $maxNeeded
+                                        
+                                        # Parallel Language Detection Logic
+                                        if (-not $dsaNoLng) {
+                                            $subIdx = [array]::IndexOf($allSubs, $sub) + 1
+                                            $tmpSel = "s$subIdx"
+                                            $sampleText = if ($cleanText.Length -gt 15000) { $cleanText.Substring(0, 15000) } else { $cleanText }
+                                            $detected = &$detectLanguageSb -Text $sampleText `
+                                                                           -CurrentLang $sub.properties.language `
+                                                                           -Honorifics:$honorificsActive `
+                                                                           -DevDebug:$devDebugActive `
+                                                                           -TrackID $sub.id `
+                                                                           -Selector $tmpSel `
+                                                                           -TrackName $sub.properties.track_name
+                                            
+                                            $detectedLangs[$sub.id] = $detected
+                                        }
+                                        $weights[$sub.id] = $cleanText.Length
+                                    } else {
+                                        $weights[$sub.id] = (Get-Item -LiteralPath $probeFile).Length
+                                    }
+                                }
+                            }
+
+                            # Compute and validate final sizing ratio
+                            if ($allSubs.Count -eq 2) {
+                                $id1 = $allSubs[0].id; $id2 = $allSubs[1].id
+                                $w1 = $weights[$id1]; $w2 = $weights[$id2]
+                                $bRatio = if ($w1 -gt 0 -or $w2 -gt 0) { [Math]::Max($w1, $w2) / [Math]::Max(1, [Math]::Min($w1, $w2)) } else { 0 }
+                                $minReq = if ($allSubs[0].codec -match "s_text|utf8|srt|ass|ssa|substationalpha|subrip") { 2.0 } else { 3.0 }
+                                if ($bRatio -ge $minReq) {
+                                    if ($devDebugActive) {
+                                        Write-Host "  [DevDebug-DSA] Bitstream/Text Probe SUCCESS (Ratio: $($bRatio.ToString('F2')))" -ForegroundColor Green
+                                    }
+                                    $isResolved = $true
+                                }
+                            }
+
+                            if ($devDebugActive) {
+                                $subIdx = 1
+                                foreach ($sub in $allSubs) {
+                                    $sSel = "s$subIdx"
+                                    $kb = [Math]::Round($weights[$sub.id] / 1024, 3)
+                                    Write-Host "    [DevDebug-DSA] Final Weight ID:$($sub.id) - Track $($sub.id + 1) - [$sSel]...($kb KB)" -ForegroundColor Gray
+                                    $subIdx++
+                                }
+                                Write-Host "    [DevDebug-DSA] Preservation Active: Files kept at -> $tempDir" -ForegroundColor DarkCyan
+                            
+                            }
+                        }
+
+                        $dsaResult = [PSCustomObject]@{
+                            Weights       = $weights
+                            DetectedLangs = $detectedLangs
+                            IsResolved    = $isResolved
+                            Logs          = @($script:LocalLogsList)
+                        }
+                    }
+                }
+
+                [PSCustomObject]@{
+                    FullName  = $f.FullName
+                    DSAResult = $dsaResult
+                }
+            } -ThrottleLimit $script:OptimalThrottleLimit
+
+            # Build rapid lookup map for sequential consumption
+            foreach ($res in $dsaParallelResults) {
+                $dsaLookupMap[$res.FullName] = $res.DSAResult
+            }
+        }
 
         # --- GENERATE FIXER QUEUE & EXECUTE SMART FIX (SEQUENTIAL) ---
         $fixProgressCounter = 0
@@ -2604,174 +2876,195 @@ foreach ($folderPath in $targetFolders) {
 
                                 # --- STAGE 2: PROBING PHASE (Weights and Language Detection) ---
                                 if ($dsaCtx.Weights.Count -eq 0) {
-                                    if ($DevDebug -and $DeepSubtitleAuditNOLanguageDetection) {
-                                        Write-Host "  [DevDebug-DSA] Language Detection: DISABLED via flag (-NLD)" -ForegroundColor DarkGray
-                                    }
-                                    $isResolved = $false
-                                    $targetRatio = 3.0
+                                    $preCalculated = if ($null -ne $dsaLookupMap) { $dsaLookupMap[$fToFix.FullName] } else { $null }
+                                    if ($null -ne $preCalculated) {
+                                        # Use pre-calculated weights directly
+                                        foreach ($key in $preCalculated.Weights.Keys) {
+                                            $dsaCtx.Weights[$key] = $preCalculated.Weights[$key]
+                                        }
 
-                                    # [Stage 2.1] FAST-PATH: Header Probe (Only valid for Dual-English pairs)
-                                    $isImgProbe = ($ambiguousTracks[0].codec -match "pgs|vobsub")
-                                    $skipHeaderForLngDetect = (-not $DeepSubtitleAuditNOLanguageDetection -and -not $isImgProbe)
+                                        # Chronologically play back all captured background logs
+                                        if ($DevDebug -and $preCalculated.Logs) {
+                                            foreach ($log in $preCalculated.Logs) {
+                                                Write-Host $log.Text -ForegroundColor $log.Color
+                                            }
+                                        }
 
-                                    if ($ambiguousTracks.Count -eq 2 -and -not $DeepSubtitleAuditDebugExtraction -and -not $skipHeaderForLngDetect) {
-                                        if ($DevDebug) { Write-Host "  [DevDebug-DSA] Probing headers for statistical metadata..." -ForegroundColor Gray }
-                                        
-                                        $h1 = if ($ambiguousTracks[0].properties.tag_number_of_frames) { [int64]$ambiguousTracks[0].properties.tag_number_of_frames } 
-                                              elseif ($ambiguousTracks[0].properties.statistics_tags.NUMBER_OF_FRAMES) { [int64]$ambiguousTracks[0].properties.statistics_tags.NUMBER_OF_FRAMES } else { 0 }
-                                        $h2 = if ($ambiguousTracks[1].properties.tag_number_of_frames) { [int64]$ambiguousTracks[1].properties.tag_number_of_frames } 
-                                              elseif ($ambiguousTracks[1].properties.statistics_tags.NUMBER_OF_FRAMES) { [int64]$ambiguousTracks[1].properties.statistics_tags.NUMBER_OF_FRAMES } else { 0 }
-                                        
-                                        $isDualEngHeader = ($ambiguousTracks[0].properties.language -eq "eng" -and $ambiguousTracks[1].properties.language -eq "eng")
+                                        # Use pre-calculated language tags
+                                        foreach ($sub in $ambiguousTracks) {
+                                            $detected = $preCalculated.DetectedLangs[$sub.id]
+                                            if ($detected -and $detected -ne "und") {
+                                                if (-not $sub.PSObject.Properties['DSA_DetectedLang']) {
+                                                    $sub | Add-Member -NotePropertyName "DSA_DetectedLang" -NotePropertyValue $detected -Force
+                                                }
 
-                                        if ($h1 -gt 0 -and $h2 -gt 0) {
-                                            if ($isDualEngHeader) {
-                                                $hRatio = [Math]::Max($h1, $h2) / [Math]::Max(1, [Math]::Min($h1, $h2))
-                                                if ($hRatio -ge $targetRatio) {
-                                                    if ($DevDebug) { Write-Host "  [DevDebug-DSA] Header Probe SUCCESS (Ratio: $($hRatio.ToString('F2')))" -ForegroundColor Green }
-                                                    $dsaCtx.Weights[$ambiguousTracks[0].id] = $h1
-                                                    $dsaCtx.Weights[$ambiguousTracks[1].id] = $h2
-                                                    $isResolved = $true
-                                                    # [FIX] Authorize Stage 3 naming logic for header-resolved files
-                                                    $currentGroup | Add-Member -MemberType NoteProperty -Name ($fileGuid + "_Ratio") -Value $targetRatio -Force
+                                                # [FIX] Oscillation Prevention: Treat 'eng' and 'enm' as equivalent matches.
+                                                $isEngEnmEquivalent = ($sub.properties.language -match "eng|enm" -and $detected -match "eng|enm")
+                                                
+                                                # [FIX] Convergence: Only fix header if not equivalent (prevents eng <-> enm loops)
+                                                if (-not $isEngEnmEquivalent -and $sub.properties.language -ne $detected) {
+                                                    $writeLang = if ($detected -eq "enm") { "eng" } else { $detected }
+                                                    if ($DevDebug) { Write-Host "  [DevDebug-DSA] Lng Fix: Track $($sub.id + 1) ($($sub.properties.language) -> $writeLang)" -ForegroundColor Yellow }
+                                                    # FORCE WRITE: Add to Params immediately to ensure disk update
+                                                    if ($Fix) { $Params += @('--edit', "track:$($sub.id + 1)", '--set', "language=$writeLang") }
+                                                    $sub.properties.language = $detected
+                                                    $needsChange = $true
+                                                }
+                                            }
+                                        }
+
+                                        # Use pre-calculated resolution mappings
+                                        if ($preCalculated.IsResolved -and $ambiguousTracks.Count -eq 2) {
+                                            $w1 = $dsaCtx.Weights[$ambiguousTracks[0].id]
+                                            $w2 = $dsaCtx.Weights[$ambiguousTracks[1].id]
+                                            if ($w1 -gt 0 -or $w2 -gt 0) {
+                                                $bRatio = [Math]::Max($w1, $w2) / [Math]::Max(1, [Math]::Min($w1, $w2))
+                                                $isText1 = $ambiguousTracks[0].codec -match "s_text|utf8|srt|ass|ssa|substationalpha|subrip"
+                                                $minReq = if ($isText1) { 2.0 } else { 3.0 }
+                                                $currentGroup | Add-Member -MemberType NoteProperty -Name ($fileGuid + "_Ratio") -Value $minReq -Force
+                                            }
+                                        }
+                                    } else {
+                                        # Fallback to sequential extraction if parallel pre-calculation results are missing
+                                        if ($DevDebug -and $DeepSubtitleAuditNOLanguageDetection) {
+                                            Write-Host "  [DevDebug-DSA] Language Detection: DISABLED via flag (-NLD)" -ForegroundColor Gray
+                                        }
+                                        $isResolved = $false
+                                        $targetRatio = 3.0
+
+                                        # [Stage 2.1] FAST-PATH: Header Probe (Only valid for Dual-English pairs)
+                                        $isImgProbe = ($ambiguousTracks[0].codec -match "pgs|vobsub")
+                                        $skipHeaderForLngDetect = (-not $DeepSubtitleAuditNOLanguageDetection -and -not $isImgProbe)
+
+                                        if ($ambiguousTracks.Count -eq 2 -and -not $DeepSubtitleAuditDebugExtraction -and -not $skipHeaderForLngDetect) {
+                                            if ($DevDebug) { Write-Host "  [DevDebug-DSA] Probing headers for statistical metadata..." -ForegroundColor Gray }
+                                            
+                                            $h1 = if ($ambiguousTracks[0].properties.tag_number_of_frames) { [int64]$ambiguousTracks[0].properties.tag_number_of_frames } 
+                                                  elseif ($ambiguousTracks[0].properties.statistics_tags.NUMBER_OF_FRAMES) { [int64]$ambiguousTracks[0].properties.statistics_tags.NUMBER_OF_FRAMES } else { 0 }
+                                            $h2 = if ($ambiguousTracks[1].properties.tag_number_of_frames) { [int64]$ambiguousTracks[1].properties.tag_number_of_frames } 
+                                                  elseif ($ambiguousTracks[1].properties.statistics_tags.NUMBER_OF_FRAMES) { [int64]$ambiguousTracks[1].properties.statistics_tags.NUMBER_OF_FRAMES } else { 0 }
+                                            
+                                            $isDualEngHeader = ($ambiguousTracks[0].properties.language -eq "eng" -and $ambiguousTracks[1].properties.language -eq "eng")
+
+                                            if ($h1 -gt 0 -and $h2 -gt 0) {
+                                                if ($isDualEngHeader) {
+                                                    $hRatio = [Math]::Max($h1, $h2) / [Math]::Max(1, [Math]::Min($h1, $h2))
+                                                    if ($hRatio -ge $targetRatio) {
+                                                        if ($DevDebug) { Write-Host "  [DevDebug-DSA] Header Probe SUCCESS (Ratio: $($hRatio.ToString('F2')))" -ForegroundColor Green }
+                                                        $dsaCtx.Weights[$ambiguousTracks[0].id] = $h1
+                                                        $dsaCtx.Weights[$ambiguousTracks[1].id] = $h2
+                                                        $isResolved = $true
+                                                        # [FIX] Authorize Stage 3 naming logic for header-resolved files
+                                                        $currentGroup | Add-Member -MemberType NoteProperty -Name ($fileGuid + "_Ratio") -Value $targetRatio -Force
+                                                    } else {
+                                                        if ($DevDebug) { Write-Host "  [DevDebug-DSA] Header Probe Skip: Ratio too low ($($hRatio.ToString('F2')))." -ForegroundColor DarkYellow }
+                                                    }
                                                 } else {
-                                                    if ($DevDebug) { Write-Host "  [DevDebug-DSA] Header Probe Skip: Ratio too low ($($hRatio.ToString('F2')))." -ForegroundColor DarkYellow }
+                                                    if ($DevDebug) { Write-Host "  [DevDebug-DSA] Header Probe Skip: Tracks not tagged as Dual-English." -ForegroundColor DarkYellow }
                                                 }
                                             } else {
-                                                if ($DevDebug) { Write-Host "  [DevDebug-DSA] Header Probe Skip: Tracks not tagged as Dual-English." -ForegroundColor DarkYellow }
+                                                if ($DevDebug) { Write-Host "  [DevDebug-DSA] Header Probe Skip: Statistical tags (NUMBER_OF_FRAMES) missing from MKV header." -ForegroundColor DarkYellow }
                                             }
-                                        } else {
-                                            if ($DevDebug) { Write-Host "  [DevDebug-DSA] Header Probe Skip: Statistical tags (NUMBER_OF_FRAMES) missing from MKV header." -ForegroundColor DarkYellow }
+                                        } elseif ($DevDebug -and $skipHeaderForLngDetect -and $ambiguousTracks.Count -eq 2) {
+                                            Write-Host "  [DevDebug-DSA] Header Probe Bypassed: Text extraction required for Language Detection (-NLD is not active)." -ForegroundColor DarkCyan
                                         }
-                                    } elseif ($DevDebug -and $skipHeaderForLngDetect -and $ambiguousTracks.Count -eq 2) {
-                                        Write-Host "  [DevDebug-DSA] Header Probe Bypassed: Text extraction required for Language Detection (-NLD is not active)." -ForegroundColor DarkCyan
-                                    }
 
-                                    # [Stage 2.2] EXTRACTION-PATH: Deep Bitstream/Text Analysis
-                                    if (-not $isResolved) {
-                                        $tempDir = Join-Path $script:GlobalTemp "DSA_Probe_$($fToFix.Name.GetHashCode().ToString('X'))"
-                                        if (Test-Path $tempDir) { Remove-Item $tempDir -Recurse -Force -ErrorAction SilentlyContinue }
-                                        New-Item -Path $tempDir -ItemType Directory | Out-Null
-                                        
-                                        $extractArgs = New-Object System.Collections.Generic.List[string]
-                                        $probeMap = @{}
-                                        foreach ($sub in $ambiguousTracks) {
+                                        # [Stage 2.2] EXTRACTION-PATH: Deep Bitstream/Text Analysis
+                                        if (-not $isResolved) {
+                                            $tempDir = Join-Path $script:GlobalTemp "DSA_Probe_$($fToFix.Name.GetHashCode().ToString('X'))"
+                                            if (Test-Path $tempDir) { Remove-Item $tempDir -Recurse -Force -ErrorAction SilentlyContinue }
+                                            New-Item -Path $tempDir -ItemType Directory | Out-Null
                                             
-                                            $isImageSub = ($sub.codec -match "PGS|VobSub")
-                                            
-                                            # OPTIMIZATION: Skip extraction of picture subs if there are 3+ tracks.
-                                            # Density/Ratio checks only apply to 1 or 2 track scenarios.
-                                            if ($isImageSub -and $ambiguousTracks.Count -gt 2) {
-                                                if ($DevDebug) { Write-Host "  [DevDebug-DSA] Skip Extraction: ID:$($sub.id) is Picture Sub and file has >2 tracks." -ForegroundColor DarkGray }
-                                                continue
-                                            }
-                                            
-                                            $ext = Get-SubtitleExtension -Codec $sub.codec
-                                            $tmpPath = Join-Path $tempDir "track$($sub.id + 1).$ext"
-                                            $extractArgs.Add("$($sub.id):$tmpPath")
-                                            $probeMap[$sub.id] = $tmpPath
-                                        }
-                                        
-                                        if ($DevDebug) { Write-Host "  [DevDebug-DSA] Extracting $($extractArgs.Count) tracks for analysis..." -ForegroundColor DarkCyan }
-                                        & $mkvextract "$($fToFix.FullName)" tracks @extractArgs | Out-Null
-                                        
-                                        foreach ($sub in $ambiguousTracks) {
-                                            $probeFile = $probeMap[$sub.id]
-                                            if ($null -ne $probeFile -and (Test-Path -LiteralPath $probeFile)) {
+                                            $extractArgs = New-Object System.Collections.Generic.List[string]
+                                            $probeMap = @{}
+                                            foreach ($sub in $ambiguousTracks) {
+                                                
                                                 $isImageSub = ($sub.codec -match "PGS|VobSub")
                                                 
-                                                if (-not $isImageSub) {
-                                                    $maxNeeded = [int]::MaxValue
-                                                        if ($ambiguousTracks.Count -eq 1) {
-                                                            $maxNeeded = if ($DeepSubtitleAuditNOLanguageDetection) { 1500 } else { 15000 }
-                                                        } elseif ($ambiguousTracks.Count -gt 2) {
-                                                            $maxNeeded = 15000
-                                                        }
-                                                        $cleanText = Extract-DialogueText -Path $probeFile -OutPath (Join-Path $tempDir "track$($sub.id + 1)_cleaned.txt") -DevDebug:$DevDebug -MaxLength $maxNeeded
-                                                    
-                                                    # Language Detection
-                                                    if (-not $DeepSubtitleAuditNOLanguageDetection) {
-                                                        # Resolve the 1-based selector (s1, s2, etc) for the display
-                                                        $allSubs = @($fToFix.PristineJson.tracks | Where-Object { $_.type -eq "subtitles" })
-                                                        $subIdx = [array]::IndexOf($allSubs, $sub) + 1
-                                                        $tmpSel = "s$subIdx"
-
-                                                        $sampleText = if ($cleanText.Length -gt 15000) { $cleanText.Substring(0, 15000) } else { $cleanText }
-                                                        $detected = Detect-SubtitleLanguage -Text $sampleText `
-                                                                                            -CurrentLang $sub.properties.language `
-                                                                                            -Honorifics:$Honorifics `
-                                                                                            -DevDebug:$DevDebug `
-                                                                                            -TrackID $sub.id `
-                                                                                            -Selector $tmpSel `
-                                                                                            -TrackName $sub.properties.track_name
-
-                                                        # [FIX] Oscillation Prevention: Treat 'eng' and 'enm' as equivalent matches.
-                                                        $isEngEnmEquivalent = ($sub.properties.language -match "eng|enm" -and $detected -match "eng|enm")
-                                                        
-                                                        # [MOD] Always record detection in memory (even if header is already 'eng') so Naming Engine can verify honorific status.
-                                                        if ($detected -ne "und" -and -not $sub.PSObject.Properties['DSA_DetectedLang']) {
-                                                            $sub | Add-Member -NotePropertyName "DSA_DetectedLang" -NotePropertyValue $detected -Force
-                                                        }
-
-                                                        # [FIX] Convergence: Only fix header if not equivalent (prevents eng <-> enm loops)
-                                                        if (-not $isEngEnmEquivalent -and $sub.properties.language -ne $detected -and $detected -ne "und") {
-                                                            $writeLang = if ($detected -eq "enm") { "eng" } else { $detected }
-                                                            if ($DevDebug) { Write-Host "  [DevDebug-DSA] Lng Fix: Track $($sub.id + 1) ($($sub.properties.language) -> $writeLang)" -ForegroundColor Yellow }
-                                                            # FORCE WRITE: Add to Params immediately to ensure disk update
-                                                            if ($Fix) { $Params += @('--edit', "track:$($sub.id + 1)", '--set', "language=$writeLang") }
-                                                            $needsChange = $true
-                                                            $sub.properties.language = $detected
-                                                        }
-                                                    }
-                                                    $dsaCtx.Weights[$sub.id] = $cleanText.Length
-                                                } else {
-                                                    # Image Sub Weights (Binary Size)
-                                                    $dsaCtx.Weights[$sub.id] = (Get-Item -LiteralPath $probeFile).Length
+                                                # OPTIMIZATION: Skip extraction of picture subs if there are 3+ tracks.
+                                                # Density/Ratio checks only apply to 1 or 2 track scenarios.
+                                                if ($isImageSub -and $ambiguousTracks.Count -gt 2) {
+                                                    if ($DevDebug) { Write-Host "  [DevDebug-DSA] Skip Extraction: ID:$($sub.id) is Picture Sub and file has >2 tracks." -ForegroundColor DarkGray }
+                                                    continue
                                                 }
-                                            }
-                                        }
-
-                                        # [Stage 2.3] RATIO CALCULATION: Exactly 2 tracks required for Sizing Decision
-                                        if ($ambiguousTracks.Count -eq 2) {
-                                            $id1 = $ambiguousTracks[0].id; $id2 = $ambiguousTracks[1].id
-                                            $w1 = $dsaCtx.Weights[$id1]; $w2 = $dsaCtx.Weights[$id2]
-
-                                            # Codec Family Check
-                                            $textPattern = "s_text|utf8|srt|ass|ssa|substationalpha|subrip"
-                                            $isText1 = $ambiguousTracks[0].codec -match $textPattern; $isText2 = $ambiguousTracks[1].codec -match $textPattern
-                                            $isPGS1  = $ambiguousTracks[0].codec -match "pgs";        $isPGS2  = $ambiguousTracks[1].codec -match "pgs"
-                                            $isVob1  = $ambiguousTracks[0].codec -match "vobsub";     $isVob2  = $ambiguousTracks[1].codec -match "vobsub"
-
-                                            if (($isText1 -and $isText2) -or ($isPGS1 -and $isPGS2) -or ($isVob1 -and $isVob2)) {
-                                                # [FIX] Gate changed to -or to allow ratios when one track is filtered to 0
-                                                $bRatio = if ($w1 -gt 0 -or $w2 -gt 0) { [Math]::Max($w1, $w2) / [Math]::Max(1, [Math]::Min($w1, $w2)) } else { 0 }
                                                 
-                                                $minReq = if ($isText1) { 2.0 } else { 3.0 }
-
-                                                if ($bRatio -ge $minReq) {
-                                                    if ($DevDebug) { Write-Host "  [DevDebug-DSA] Bitstream/Text Probe SUCCESS (Ratio: $($bRatio.ToString('F2')))" -ForegroundColor Green }
-                                                    $isResolved = $true
-                                                    $currentGroup | Add-Member -MemberType NoteProperty -Name ($fileGuid + "_Ratio") -Value $minReq -Force
-                                                } else {
-                                                    if ($DevDebug) { Write-Host "  [DevDebug-DSA] Ratio too low ($($bRatio.ToString('F2'))). Skipping Naming logic." -ForegroundColor DarkGray }
-                                                }
-                                            } else {
-                                                if ($DevDebug) { Write-Host "  [DevDebug-DSA] Analysis Skipped: Mixed Codec Families detected." -ForegroundColor DarkGray }
+                                                $ext = Get-SubtitleExtension -Codec $sub.codec
+                                                $tmpPath = Join-Path $tempDir "track$($sub.id + 1).$ext"
+                                                $extractArgs.Add("$($sub.id):$tmpPath")
+                                                $probeMap[$sub.id] = $tmpPath
                                             }
-                                        }
-
-                                        # Cleanup artifacts
-                                        if ($DevDebug) {
-                                            $allSubs = @($fToFix.PristineJson.tracks | Where-Object { $_.type -eq "subtitles" })
+                                            
+                                            if ($DevDebug) { Write-Host "  [DevDebug-DSA] Extracting $($extractArgs.Count) tracks for analysis..." -ForegroundColor DarkCyan }
+                                            & $mkvextract "$($fToFix.FullName)" tracks @extractArgs | Out-Null
+                                            
                                             foreach ($sub in $ambiguousTracks) {
-                                                $sIdx = [array]::IndexOf($allSubs, $sub) + 1
-                                                $sSel = "s$sIdx"
-                                                $kb = [Math]::Round($dsaCtx.Weights[$sub.id] / 1024, 3)
-                                                Write-Host "    [DevDebug-DSA] Final Weight ID:$($sub.id) - Track $($sub.id + 1) - [$sSel]...($kb KB)" -ForegroundColor Gray
+                                                $probeFile = $probeMap[$sub.id]
+                                                if ($null -ne $probeFile -and (Test-Path -LiteralPath $probeFile)) {
+                                                    $isImageSub = ($sub.codec -match "PGS|VobSub")
+                                                    
+                                                    if (-not $isImageSub) {
+                                                        $maxNeeded = [int]::MaxValue
+                                                            if ($ambiguousTracks.Count -eq 1) {
+                                                                $maxNeeded = if ($DeepSubtitleAuditNOLanguageDetection) { 1500 } else { 15000 }
+                                                            } elseif ($ambiguousTracks.Count -gt 2) {
+                                                                $maxNeeded = 15000
+                                                            }
+                                                            $cleanText = Extract-DialogueText -Path $probeFile -OutPath (Join-Path $tempDir "track$($sub.id + 1)_cleaned.txt") -DevDebug:$DevDebug -MaxLength $maxNeeded
+                                                        
+                                                        # Language Detection
+                                                        if (-not $DeepSubtitleAuditNOLanguageDetection) {
+                                                            # Resolve the 1-based selector (s1, s2, etc) for the display
+                                                            $allSubs = @($fToFix.PristineJson.tracks | Where-Object { $_.type -eq "subtitles" })
+                                                            $subIdx = [array]::IndexOf($allSubs, $sub) + 1
+                                                            $tmpSel = "s$subIdx"
+
+                                                            $sampleText = if ($cleanText.Length -gt 15000) { $cleanText.Substring(0, 15000) } else { $cleanText }
+                                                            $detected = Detect-SubtitleLanguage -Text $sampleText `
+                                                                                                -CurrentLang $sub.properties.language `
+                                                                                                -Honorifics:$Honorifics `
+                                                                                                -DevDebug:$DevDebug `
+                                                                                                -TrackID $sub.id `
+                                                                                                -Selector $tmpSel `
+                                                                                                -TrackName $sub.properties.track_name
+
+                                                            # [FIX] Oscillation Prevention: Treat 'eng' and 'enm' as equivalent matches.
+                                                            $isEngEnmEquivalent = ($sub.properties.language -match "eng|enm" -and $detected -match "eng|enm")
+                                                            
+                                                            # [MOD] Always record detection in memory (even if header is already 'eng') so Naming Engine can verify honorific status.
+                                                            if ($detected -ne "und" -and -not $sub.PSObject.Properties['DSA_DetectedLang']) {
+                                                                $sub | Add-Member -NotePropertyName "DSA_DetectedLang" -NotePropertyValue $detected -Force
+                                                            }
+
+                                                            # [FIX] Convergence: Only fix header if not equivalent (prevents eng <-> enm loops)
+                                                            if (-not $isEngEnmEquivalent -and $sub.properties.language -ne $detected -and $detected -ne "und") {
+                                                                $writeLang = if ($detected -eq "enm") { "eng" } else { $detected }
+                                                                if ($DevDebug) { Write-Host "  [DevDebug-DSA] Lng Fix: Track $($sub.id + 1) ($($sub.properties.language) -> $writeLang)" -ForegroundColor Yellow }
+                                                                # FORCE WRITE: Add to Params immediately to ensure disk update
+                                                                if ($Fix) { $Params += @('--edit', "track:$($sub.id + 1)", '--set', "language=$writeLang") }
+                                                                $sub.properties.language = $detected
+                                                            }
+                                                        }
+                                                        $dsaCtx.Weights[$sub.id] = $cleanText.Length
+                                                    } else {
+                                                        # Image Sub Weights (Binary Size)
+                                                        $dsaCtx.Weights[$sub.id] = (Get-Item -LiteralPath $probeFile).Length
+                                                    }
+                                                }
                                             }
-                                            Write-Host "    [DevDebug-DSA] Preservation Active: Files kept at -> $tempDir" -ForegroundColor DarkCyan
-                                        } else {
-                                            if (Test-Path $tempDir) { Remove-Item $tempDir -Recurse -Force -ErrorAction SilentlyContinue }
+
+                                            # Cleanup artifacts
+                                            if ($DevDebug) {
+                                                $allSubs = @($fToFix.PristineJson.tracks | Where-Object { $_.type -eq "subtitles" })
+                                                foreach ($sub in $ambiguousTracks) {
+                                                    $sIdx = [array]::IndexOf($allSubs, $sub) + 1
+                                                    $sSel = "s$sIdx"
+                                                    $kb = [Math]::Round($dsaCtx.Weights[$sub.id] / 1024, 3)
+                                                    Write-Host "    [DevDebug-DSA] Final Weight ID:$($sub.id) - Track $($sub.id + 1) - [$sSel]...($kb KB)" -ForegroundColor Gray
+                                                }
+                                                Write-Host "    [DevDebug-DSA] Preservation Active: Files kept at -> $tempDir" -ForegroundColor DarkCyan
+                                            } else {
+                                                if (Test-Path $tempDir) { Remove-Item $tempDir -Recurse -Force -ErrorAction SilentlyContinue }
+                                            }
                                         }
                                     }
                                 }
