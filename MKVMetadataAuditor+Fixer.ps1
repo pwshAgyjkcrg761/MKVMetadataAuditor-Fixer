@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: MKVMetadataAuditor+Fixer.ps1
-# VERSION: 2026.06.10__21.36.00
+# VERSION: 2026.06.12__11.13.00
 # TARGET: PowerShell 7.6.2 LTS
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -128,7 +128,7 @@ if ($FixNoBackup) { $Fix = $true }
 if ($DeepSubtitleAuditDebugExtraction -or $DeepSubtitleAuditLanguageDetectionLimit2 -or $DeepSubtitleAuditNOLanguageDetection) { $DeepSubtitleAudit = $true }
 
 # --- GLOBAL VERSION DEFINITION ---
-$scriptVersion = "2026.06.10__21.36.00"
+$scriptVersion = "2026.06.12__11.13.00"
 
 # --- VERSION REPORTER ---
 if ($Version) {
@@ -152,6 +152,57 @@ function Initialize-NaturalSort {
 '@
     if (-not ([System.Management.Automation.PSTypeName]"NaturalSort").Type) {
         Add-Type -TypeDefinition $NaturalSortDefinition
+    }
+}
+
+function Initialize-MediaInfo {
+    param([string]$DllPath)
+    
+    $MediaInfoDefinition = @"
+    using System;
+    using System.Runtime.InteropServices;
+
+    public enum StreamKind { General, Video, Audio, Text, Other, Image, Menu, Max }
+    public enum InfoKind { Name, Text, Measure, Options, NameText, MeasureText, Max }
+
+    public class MediaInfo {
+        [DllImport("MediaInfo.dll", CharSet = CharSet.Unicode)]
+        public static extern IntPtr MediaInfo_New();
+        [DllImport("MediaInfo.dll", CharSet = CharSet.Unicode)]
+        public static extern void MediaInfo_Delete(IntPtr Handle);
+        [DllImport("MediaInfo.dll", CharSet = CharSet.Unicode)]
+        public static extern IntPtr MediaInfo_Open(IntPtr Handle, string FileName);
+        [DllImport("MediaInfo.dll", CharSet = CharSet.Unicode)]
+        public static extern void MediaInfo_Close(IntPtr Handle);
+        [DllImport("MediaInfo.dll", CharSet = CharSet.Unicode, PreserveSig = true)]
+        public static extern IntPtr MediaInfo_Get(IntPtr Handle, StreamKind Kind, UIntPtr StreamNumber, string Parameter, InfoKind KindOfInfo, InfoKind KindOfSearch);
+        [DllImport("MediaInfo.dll", CharSet = CharSet.Unicode)]
+        public static extern IntPtr MediaInfo_Option(IntPtr Handle, string Option, string Value);
+    }
+"@
+    
+    # Pre-load the DLL if a specific path was found; otherwise, rely on System PATH
+    if ([string]::IsNullOrWhiteSpace($DllPath)) { $DllPath = "MediaInfo.dll" }
+
+    try {
+        # Attempt 1: Load via the absolute path discovered
+        [void][System.Runtime.InteropServices.NativeLibrary]::Load($DllPath)
+    } catch {
+        try {
+            # Attempt 2: Fallback to bare-name load (Lets OS search System PATH)
+            [void][System.Runtime.InteropServices.NativeLibrary]::Load("MediaInfo.dll")
+        } catch {
+            Write-Host "`n [!] ERROR: MediaInfo.dll found but failed to load:" -ForegroundColor DarkRed
+            Write-Host "     -> Path: $DllPath" -ForegroundColor DarkYellow
+            
+            Write-Host "`n [TIP] This is usually caused by a bitness mismatch (e.g. 32-bit DLL" -ForegroundColor Cyan
+            Write-Host "       in 64-bit PowerShell) or missing VC++ Redistributable files." -ForegroundColor Cyan
+            Pause; exit
+        }
+    }
+
+    if (-not ([System.Management.Automation.PSTypeName]"MediaInfo").Type) {
+        Add-Type -TypeDefinition $MediaInfoDefinition
     }
 }
 
@@ -180,18 +231,52 @@ function Sort-NaturalFiles {
 }
 
 function Get-MKVToolPaths {
+    $Resolve = {
+        param($cmd)
+        $path = Get-Command $cmd -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source
+        if ($path -and (Test-Path -LiteralPath $path)) { return $path }
+        return $null
+    }
+
     $tools = @{
-        propedit  = Get-Command mkvpropedit.exe -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source
-        merge     = Get-Command mkvmerge.exe    -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source
-        extract   = Get-Command mkvextract.exe  -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source
-        mediainfo = Get-Command MediaInfo.exe   -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source
+        propedit     = &$Resolve "mkvpropedit.exe"
+        merge        = &$Resolve "mkvmerge.exe"
+        extract      = &$Resolve "mkvextract.exe"
+        mediainfoDll = &$Resolve "MediaInfo.dll"
     }
 
     # Fallbacks
-    if (-not $tools.propedit) { $tools.propedit = "C:\Program Files\MKVToolNix\mkvpropedit.exe" }
-    if (-not $tools.merge)    { $tools.merge    = "C:\Program Files\MKVToolNix\mkvmerge.exe" }
+    if (-not $tools.propedit -or -not (Test-Path -LiteralPath $tools.propedit)) { $tools.propedit = "C:\Program Files\MKVToolNix\mkvpropedit.exe" }
+    if (-not $tools.merge -or -not (Test-Path -LiteralPath $tools.merge))    { $tools.merge    = "C:\Program Files\MKVToolNix\mkvmerge.exe" }
     if (-not $tools.extract)  { $tools.extract  = "C:\Program Files\MKVToolNix\mkvextract.exe" }
-    if (-not $tools.mediainfo) { $tools.mediainfo = "C:\Program Files\MediaInfo\MediaInfo.exe" }
+    
+    # MediaInfo.dll Search
+    if (-not $tools.mediainfoDll) {
+        $dllSearchPaths = New-Object System.Collections.Generic.List[string]
+        $dllSearchPaths.Add((Join-Path $PSScriptRoot "MediaInfo.dll"))
+        $dllSearchPaths.Add("C:\Program Files\MediaInfo.dll\MediaInfo.dll")
+        $dllSearchPaths.Add("C:\Program Files\MediaInfo\MediaInfo.dll")
+        
+        # Verify initial candidates before adding ENV paths
+        $validBase = $dllSearchPaths | Where-Object { Test-Path -LiteralPath $_ }
+        if ($validBase) { $tools.mediainfoDll = $validBase[0]; return $tools }
+
+        $envPaths = $env:Path.Split(';', [System.StringSplitOptions]::RemoveEmptyEntries)
+        foreach ($p in $envPaths) { 
+            try {
+                $expanded = [System.Environment]::ExpandEnvironmentVariables($p)
+                $cleanPath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($expanded)
+                $dllSearchPaths.Add((Join-Path $cleanPath "MediaInfo.dll")) 
+            } catch {}
+        }
+
+        foreach ($path in $dllSearchPaths) {
+            if (Test-Path -LiteralPath $path) { 
+                $tools.mediainfoDll = $path
+                break 
+            }
+        }
+    }
 
     return $tools
 }
@@ -281,64 +366,52 @@ function Test-IsExcluded {
 function Test-IsNoHw {
     param(
         [string]$FilePath,
-        [string]$MediaInfoPath
+        [string]$MediaInfoDllPath # Placeholder
     )
-    if (-not (Test-Path -LiteralPath $MediaInfoPath)) { return [PSCustomObject]@{ IsHigh10 = $false; IsReadable = $false; Error = "MediaInfo Missing" } }
     
-    # 1. Validation: Check if the file is accessible and if MediaInfo can see its format
-    if (-not (Test-Path -LiteralPath $FilePath)) {
-        return [PSCustomObject]@{ IsNoHw = $false; IsReadable = $false; Error = "File Not Found" }
+    $handle = [MediaInfo]::MediaInfo_New()
+    
+    # Nested Helper for Safe String Marshalling
+    $GetVal = {
+        param($h, $kind, $id, $param)
+        $ptr = [MediaInfo]::MediaInfo_Get($h, $kind, $id, $param, [InfoKind]::Text, [InfoKind]::Name)
+        if ($ptr -ne [IntPtr]::Zero) { return [System.Runtime.InteropServices.Marshal]::PtrToStringUni($ptr) }
+        return ""
     }
 
-    # Convert to Extended-Length Path to bypass the Windows 260-character limit for external CLI tools
-    $miFilePath = $FilePath
-    if ($FilePath -notlike "\\?\*") {
-        if ($FilePath.StartsWith("\\")) {
-            $miFilePath = "\\?\UNC\" + $FilePath.Substring(2)
-        } else {
-            $miFilePath = "\\?\" + $FilePath
-        }
-    }
-
-    $genFormat = ""
     try {
-        # Get multiple fields at once to minimize CLI overhead and verify file structure
-        $raw = & $MediaInfoPath --Inform="General;%Format%|%VideoCount%|%FileExtension%" "$miFilePath"
-        if ($raw -is [array]) { $raw = $raw[0] }
-        $parts = "$raw".Split('|')
-        
-        $genFormat = if ($parts.Count -gt 0) { $parts[0].Trim() } else { "" }
-        $vCount    = if ($parts.Count -gt 1) { $parts[1].Trim() } else { "0" }
-        $extension = if ($parts.Count -gt 2) { $parts[2].Trim() } else { "" }
+        if ([MediaInfo]::MediaInfo_Open($handle, $FilePath) -eq 0) {
+             return [PSCustomObject]@{ IsNoHw = $false; IsReadable = $false; Error = "File Open Failed" }
+        }
 
-        # If MediaInfo cannot determine the container format (genFormat), the file is invalid/corrupted
-        # regardless of whether it has a file extension.
+        $genFormat = &$GetVal $handle ([StreamKind]::General) 0 "Format"
+        $vCountStr = &$GetVal $handle ([StreamKind]::General) 0 "VideoCount"
+        
         if ([string]::IsNullOrWhiteSpace($genFormat)) {
-             return [PSCustomObject]@{ IsHigh10 = $false; IsReadable = $false; Error = "Unreadable Header/Corrupted" }
+             return [PSCustomObject]@{ IsNoHw = $false; IsReadable = $false; Error = "Unreadable Header/Corrupted" }
         }
 
-        # 2. Track Check: Skip profile checks if no video is present (e.g., audio-only files)
-        if ($vCount -eq "0" -or [string]::IsNullOrWhiteSpace($vCount)) {
-            return [PSCustomObject]@{ IsNoHw = $false; IsReadable = $false; Error = "Unreadable Header/Corrupted" }
+        if ([string]::IsNullOrWhiteSpace($vCountStr) -or $vCountStr -eq "0") {
+             return [PSCustomObject]@{ IsNoHw = $false; IsReadable = $false; Error = "No Video Tracks Found" }
         }
 
-        # 3. Extraction: Get specific NoHW compatibility metrics
-        $miRaw = & $MediaInfoPath --Inform="Video;%ChromaSubsampling%|%ColorSpace%|%Format_Profile%|%Format%" "$miFilePath"
-        if ($miRaw -is [array]) { $miRaw = $miRaw[0] }
-        $m = "$miRaw".Split('|')
-        
-        $isHi10 = ($m[2] -match "High 10")
-        $is422  = ($m[0] -eq "4:2:2")
-        $is444  = ($m[0] -eq "4:4:4")
-        $isRGB  = ($m[1] -eq "RGB")
+        $chroma  = &$GetVal $handle ([StreamKind]::Video) 0 "ChromaSubsampling"
+        $space   = &$GetVal $handle ([StreamKind]::Video) 0 "ColorSpace"
+        $prof    = &$GetVal $handle ([StreamKind]::Video) 0 "Format_Profile"
+        $vFormat = &$GetVal $handle ([StreamKind]::Video) 0 "Format"
+
+        $isHi10 = ($prof -match "High 10")
+        $is422  = ($chroma -eq "4:2:2")
+        $is444  = ($chroma -eq "4:4:4")
+        $isRGB  = ($space -eq "RGB")
 
         return [PSCustomObject]@{ 
             IsNoHw     = ($isHi10 -or $is444 -or $is422 -or $isRGB)
             IsReadable = $true
-            Format     = $m[3]
-            Profile    = $m[2]
-            Chroma     = $m[0]
-            Space      = $m[1]
+            Format     = $vFormat
+            Profile    = $prof
+            Chroma     = $chroma
+            Space      = $space
             Flags      = @(
                 if ($isHi10) { "AVC Hi10P" }
                 if ($is422)  { "Chroma 4:2:2" }
@@ -347,7 +420,10 @@ function Test-IsNoHw {
             ) -join ', '
         }
     } catch {
-        return [PSCustomObject]@{ IsNoHw = $false; IsReadable = $false; Error = "CLI Execution Error" }
+        return [PSCustomObject]@{ IsNoHw = $false; IsReadable = $false; Error = "DLL Memory Violation" }
+    } finally {
+        [MediaInfo]::MediaInfo_Close($handle)
+        [MediaInfo]::MediaInfo_Delete($handle)
     }
 }
 
@@ -546,9 +622,11 @@ $global:trackCounters = @{ "video" = 1; "audio" = 1; "subtitles" = 1 }
 function Get-AuditSelector {
     param($type, [switch]$Reset)
     if ($Reset) { $global:trackCounters = @{ "video" = 1; "audio" = 1; "subtitles" = 1 }; return "" }
-    $val = $global:trackCounters[$type]
+    if ([string]::IsNullOrWhiteSpace($type) -or -not $global:trackCounters.ContainsKey($type.ToLower())) { return "?" }
+    $key = $type.ToLower()
+    $val = $global:trackCounters[$key]
     $letter = switch ($type) { "video" { "v" } "audio" { "a" } "subtitles" { "s" } }
-    $global:trackCounters[$type]++
+    $global:trackCounters[$key]++
     return "$letter$val"
 }
 
@@ -591,26 +669,34 @@ function Get-AuditFlags {
     }
     
         # --- DEEP VIDEO INSPECTION (NoHW Flags) ---
-    if (Test-Path -LiteralPath $MediaInfoPath) {
-        # Convert to Extended-Length Path to bypass the Windows 260-character limit for external CLI tools
-        $miFilePath = $FilePath
-        if ($FilePath -notlike "\\?\*") {
-            if ($FilePath.StartsWith("\\")) {
-                $miFilePath = "\\?\UNC\" + $FilePath.Substring(2)
-            } else {
-                $miFilePath = "\\?\" + $FilePath
+    $miHandle = [MediaInfo]::MediaInfo_New()
+    
+    $GetVal = {
+        param($h, $kind, $id, $param)
+        $ptr = [MediaInfo]::MediaInfo_Get($h, $kind, $id, $param, [InfoKind]::Text, [InfoKind]::Name)
+        if ($ptr -ne [IntPtr]::Zero) { return [System.Runtime.InteropServices.Marshal]::PtrToStringUni($ptr) }
+        return ""
+    }
+
+    try {
+        if ([MediaInfo]::MediaInfo_Open($miHandle, $FilePath) -ne 0) {
+            $chroma  = &$GetVal $miHandle ([StreamKind]::Video) 0 "ChromaSubsampling"
+            $space   = &$GetVal $miHandle ([StreamKind]::Video) 0 "ColorSpace"
+            $prof    = &$GetVal $miHandle ([StreamKind]::Video) 0 "Format_Profile"
+            $vFormat = &$GetVal $miHandle ([StreamKind]::Video) 0 "Format"
+
+            if (-not [string]::IsNullOrWhiteSpace($vFormat)) {
+                if ($prof -match "High 10") { $reasons += "🔟 [NoHW: AVC Hi10P] " }
+                if ($chroma -eq "4:2:2")      { $reasons += "🎨 [NoHW: Chroma 4:2:2] " }
+                if ($chroma -eq "4:4:4")      { $reasons += "🎨 [NoHW: Chroma 4:4:4] " }
+                if ($space -eq "RGB")        { $reasons += "🌈 [NoHW: RGB] " }
             }
+            [MediaInfo]::MediaInfo_Close($miHandle)
         }
-        $miRaw = & $MediaInfoPath --Inform="Video;%ChromaSubsampling%|%ColorSpace%|%Format_Profile%|%Format%" "$miFilePath"
-        if ($miRaw -is [array]) { $miRaw = $miRaw[0] }
-        $m = "$miRaw".Split('|')
-        
-        if ($m.Count -ge 4 -and $m[3] -ne '') {
-            if ($m[2] -match "High 10") { $reasons += "🔟 [NoHW: AVC Hi10P] " }
-            if ($m[0] -eq "4:2:2")      { $reasons += "🎨 [NoHW: Chroma 4:2:2] " }
-            if ($m[0] -eq "4:4:4")      { $reasons += "🎨 [NoHW: Chroma 4:4:4] " }
-            if ($m[1] -eq "RGB")        { $reasons += "🌈 [NoHW: RGB] " }
-        }
+    } catch {
+        # Log suppression for memory faults in corrupted files
+    } finally {
+        [MediaInfo]::MediaInfo_Delete($miHandle)
     }
 
     if ($tracks | Where-Object { $_.properties.forced_track }) { $reasons += "🚨[Forced Track] " }
@@ -1304,25 +1390,45 @@ $ProgressPreference = 'Continue'
 # Initialize Sort Engine
 Initialize-NaturalSort
 
-# Tool Discovery
+# Tool Discovery (Gather paths before initializing engines)
 $tools = Get-MKVToolPaths
-$mkvpropedit = $tools.propedit
-$mkvmerge    = $tools.merge
-$mkvextract  = $tools.extract
-$mediainfo   = $tools.mediainfo
+$mkvpropedit  = $tools.propedit
+$mkvmerge     = $tools.merge
+$mkvextract   = $tools.extract
+$mediainfoDll = $tools.mediainfoDll
 
 # --- FINAL VALIDATION ---
-$missingTools = @()
-if (-not (Test-Path -LiteralPath $mkvpropedit)) { $missingTools += "mkvpropedit.exe" }
-if (-not (Test-Path -LiteralPath $mkvmerge))    { $missingTools += "mkvmerge.exe" }
-if (-not (Test-Path -LiteralPath $mediainfo))   { $missingTools += "MediaInfo.exe" }
+$missingTools = New-Object System.Collections.Generic.List[string]
 
+if ([string]::IsNullOrWhiteSpace($mkvpropedit) -or -not (Test-Path -LiteralPath $mkvpropedit)) { [void]$missingTools.Add("mkvpropedit.exe (MKVToolNix)") }
+if ([string]::IsNullOrWhiteSpace($mkvmerge) -or -not (Test-Path -LiteralPath $mkvmerge))    { [void]$missingTools.Add("mkvmerge.exe (MKVToolNix)") }
+
+# Check for DLL: Try the discovered path first, then manually scan System PATH
+$dllExists = if ([string]::IsNullOrWhiteSpace($mediainfoDll)) { $false } else { Test-Path -LiteralPath $mediainfoDll }
+if (-not $dllExists) {
+    $dllExists = @($env:Path.Split(';', [System.StringSplitOptions]::RemoveEmptyEntries) | Where-Object { Test-Path (Join-Path $_ "MediaInfo.dll") }).Count -gt 0
+}
+if (-not $dllExists) { [void]$missingTools.Add("MediaInfo.dll (MediaInfo)") }
+
+# 2. Unified Missing Report (Decision point)
 if ($missingTools.Count -gt 0) {
-    Write-Host "[!] ERROR: The following tools were not found in PATH or default locations:" -ForegroundColor DarkRed
-    $missingTools | ForEach-Object { Write-Host "  - $_" -ForegroundColor DarkYellow }
-    Write-Host "`nPlease install MKVToolNix and MediaInfo CLI or ensure they are in your System PATH." -ForegroundColor Cyan
+    Write-Host "`n [!] ERROR: The following dependencies are missing:" -ForegroundColor DarkRed
+    $missingTools.Sort({ param($a,$b) [NaturalSort]::StrCmpLogicalW($a, $b) })
+    $missingTools | ForEach-Object { Write-Host "     -> $_" -ForegroundColor DarkYellow }
+    
+    Write-Host "`n [TIP] If you recently installed these tools or modified your System PATH," -ForegroundColor Cyan
+    Write-Host "       please reboot your computer to ensure the changes are applied." -ForegroundColor Cyan
+    
+    $needed = New-Object System.Collections.Generic.List[string]
+    if ($missingTools -match "MKVToolNix") { [void]$needed.Add("MKVToolNix") }
+    if ($missingTools -match "MediaInfo")  { [void]$needed.Add("MediaInfo") }
+    
+    Write-Host "`n Please install $($needed -join ' and ') to proceed." -ForegroundColor Gray
     Pause; exit
 }
+
+# 3. Final Initialization (Only triggers if everything above was found)
+Initialize-MediaInfo -DllPath $mediainfoDll
 
 # [CHANGE] v2026.05.29__15.11.02 - Debug Tool Path Visibility
 if ($DevDebug) {
@@ -1330,7 +1436,7 @@ if ($DevDebug) {
     Write-Host "  -> mkvmerge:    $mkvmerge" -ForegroundColor Gray
     Write-Host "  -> mkvpropedit: $mkvpropedit" -ForegroundColor Gray
     Write-Host "  -> mkvextract:  $mkvextract" -ForegroundColor Gray
-    Write-Host "  -> MediaInfo:   $mediainfo`n" -ForegroundColor Gray
+    Write-Host "  -> MediaInfo:   $mediainfoDll`n" -ForegroundColor Gray
 }
 
 if ($PSVersionTable.PSVersion -lt [version]"7.6.2") {
@@ -1969,15 +2075,14 @@ foreach ($folderPath in $targetFolders) {
     if ($mkvFiles.Count -eq 0) { continue }
     
     # --- DYNAMIC PADDING (PER FOLDER) ---
-    # [FIX] v2026.05.15_15.02.00 - Bypass probes if searching to match Finder speed
-    if (-not $NoHwVideoSearch) {
+    # v2026.05.15_15.02.00 - Bypass probes if searching to match Finder speed
+    if (-not $NoHwVideoSearch -and $mkvFiles.Count -gt 0) {
         $allCodecs = foreach ($f in $mkvFiles) { (& $mkvmerge -J $f.FullName | ConvertFrom-Json).tracks.codec }
         $codecPadding = [Math]::Max(5, ($allCodecs | Measure-Object -Property Length -Maximum).Maximum)
         
         $allTrackNames = foreach ($f in $mkvFiles) { (& $mkvmerge -J $f.FullName | ConvertFrom-Json).tracks.properties.track_name }
         $namePadding = [Math]::Max(4, ($allTrackNames | Measure-Object -Property Length -Maximum).Maximum)
     } else {
-        # Defaults to prevent errors in shared logic
         $codecPadding = 10
         $namePadding = 20
     }
@@ -2091,13 +2196,14 @@ foreach ($folderPath in $targetFolders) {
             $json = & $mkvmerge -J $f.FullName | ConvertFrom-Json
             $f | Add-Member -NotePropertyName "PristineJson" -NotePropertyValue $json -Force
             # [FIX] v2026.06.10 - Incorporate NoHW Profile into signature to force unique grouping
-            $noHwStatus = Test-IsNoHw -FilePath $f.FullName -MediaInfoPath $mediainfo
+            $noHwStatus = Test-IsNoHw -FilePath $f.FullName -MediaInfoPath $mediainfoDll
             Get-AuditSelector -Reset
             $sig = (($json.tracks | ForEach-Object { 
                 $p = $_.properties
-                $sel = Get-AuditSelector $_.type
+                $tType = if ($_.type) { $_.type } else { "unknown" }
+                $sel = Get-AuditSelector $tType
                 $hwSig = if ($_.type -eq "video" -and $noHwStatus.IsReadable) { "|NoHW:$($noHwStatus.Flags)" } else { "" }
-                "$($_.id)|$sel|$($_.type)|$($_.codec)|$($p.language)|Def:$([bool]$p.default_track)|Frc:$([bool]$p.forced_track)|HI:$([bool]$p.flag_hearing_impaired)|$($p.track_name)$hwSig" 
+                "$($_.id)|$sel|$($tType)|$($_.codec)|$($p.language)|Def:$([bool]$p.default_track)|Frc:$([bool]$p.forced_track)|HI:$([bool]$p.flag_hearing_impaired)|$($p.track_name)$hwSig" 
             }) -join "`n")
             
             # Signature Debugging
@@ -2107,8 +2213,8 @@ foreach ($folderPath in $targetFolders) {
             }
             
             # --- SEPARATE NOHW VIDEO SEARCH ---
-            if ($NoHwVideoSearch -and (Test-Path -LiteralPath $mediainfo)) {
-                $status = Test-IsNoHw -FilePath $f.FullName -MediaInfoPath $mediainfo
+            if ($NoHwVideoSearch -and (Test-Path -LiteralPath $mediainfoDll)) {
+                $status = Test-IsNoHw -FilePath $f.FullName -MediaInfoPath $mediainfoDll
                 if ($status.IsNoHw) {
                     $noHwCount++
                     $noHwList.Add($f.FullName)
@@ -2162,7 +2268,7 @@ foreach ($folderPath in $targetFolders) {
             $stableIndex = $global:GroupMap[$sig]
             $isPrimary = ($g -eq 0)
             $repFile = $currentGroup.Files[0]
-            $reasons = Get-AuditFlags -tracks $currentGroup.Json.tracks -IsWestern $Western -fixerConfig $fixerConfig -Honorifics $Honorifics -SubtitlesHearingImpaired $SubtitlesHearingImpaired -FilePath $repFile.FullName -MediaInfoPath $mediainfo
+            $reasons = Get-AuditFlags -tracks $currentGroup.Json.tracks -IsWestern $Western -fixerConfig $fixerConfig -Honorifics $Honorifics -SubtitlesHearingImpaired $SubtitlesHearingImpaired -FilePath $repFile.FullName -MediaInfoPath $mediainfoDll
 
             
             $entry = New-Object System.Collections.Generic.List[string]
