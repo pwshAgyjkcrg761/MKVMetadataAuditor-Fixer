@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: MKVMetadataAuditor+Fixer.ps1
-# VERSION: 2026.06.12__11.13.00
+# VERSION: 2026.06.12__12.07.54
 # TARGET: PowerShell 7.6.2 LTS
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -128,7 +128,7 @@ if ($FixNoBackup) { $Fix = $true }
 if ($DeepSubtitleAuditDebugExtraction -or $DeepSubtitleAuditLanguageDetectionLimit2 -or $DeepSubtitleAuditNOLanguageDetection) { $DeepSubtitleAudit = $true }
 
 # --- GLOBAL VERSION DEFINITION ---
-$scriptVersion = "2026.06.12__11.13.00"
+$scriptVersion = "2026.06.12__12.07.54"
 
 # --- VERSION REPORTER ---
 if ($Version) {
@@ -1943,9 +1943,19 @@ function Write-InlineProgress {
     
     $bar = ("█" * $done) + ("░" * $left)
     # Using ${Message} ensures the colon is treated as plain text
-    # PadRight(100) ensures the entire line is cleared before writing the new one
-    # [FIX] v2026.06.02_22.09.00 - Standardized flat line sequential padding for safe terminal streaming
-    $progressLine = "[SHIELD] ${Message}: [$bar] $percent% ($Current/$Total)".PadRight(120)
+    # Time Calculations
+    $elapsed = [DateTime]::Now - $script:SessionStartTime
+    $te = "{0:hh\:mm\:ss}" -f $elapsed
+    
+    $tr = "--:--:--"
+    if ($Current -gt 0) {
+        $secPerFile = $elapsed.TotalSeconds / $Current
+        $remainingSecs = $secPerFile * ($Total - $Current)
+        $tr = "{0:hh\:mm\:ss}" -f [TimeSpan]::FromSeconds($remainingSecs)
+    }
+
+    # [FIX] v2026.06.12_11.32.00 - Added TE/TR (Time Elapsed / Estimated Time Remaining)
+    $progressLine = "[SHIELD] ${Message}: [$bar] $percent% ($Current/$Total) | TE: $te | ETR: $tr".PadRight(120)
 
     
     Write-Host "`n$progressLine`n" -ForegroundColor Cyan
@@ -1981,6 +1991,7 @@ if ($fast) {
     Write-Host " [i] Initializing session: Counting video files..." -ForegroundColor DarkCyan
     $sessionFileList = New-Object System.Collections.Generic.List[string]
     $folderCounter = 0
+    $script:SessionStartTime = [DateTime]::Now
     
     foreach ($folder in $targetFolders) {
         $folderCounter++
