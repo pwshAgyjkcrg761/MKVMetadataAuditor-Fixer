@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: MKVMetadataAuditor+Fixer.ps1
-# VERSION: 2026.06.13__15.00.00
+# VERSION: 2026.06.13__16.48.00
 # TARGET: PowerShell 7.6.2 LTS
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -137,7 +137,7 @@ if ($FixNoBackup) { $Fix = $true }
 if ($DeepSubtitleAuditDebugExtraction -or $DeepSubtitleAuditLanguageDetectionLimit2 -or $DeepSubtitleAuditNOLanguageDetection) { $DeepSubtitleAudit = $true }
 
 # --- GLOBAL VERSION DEFINITION ---
-$scriptVersion = "2026.06.13__15.00.00"
+$scriptVersion = "2026.06.13__16.48.00"
 
 # --- VERSION REPORTER ---
 if ($Version) {
@@ -1518,11 +1518,6 @@ if (($null -eq $PathParts -or $PathParts.Count -eq 0) -and -not ($DelLog -or $Cl
 $script:OptimalThrottleLimit = 4 # Default safe middle-ground
 $script:ThrottleReason = "Default (Conservative)"
 
-if ($Sequential) {
-    $script:OptimalThrottleLimit = 1
-    $script:ThrottleReason = "User Forced (Sequential)"
-}
-
 try {
     if ($inputPaths.Count -gt 0) {
         $targetDrive = $inputPaths[0]
@@ -1557,6 +1552,12 @@ try {
     }
 } catch {
     $script:OptimalThrottleLimit = 4
+}
+
+# Final User Override: Ensure -Sequential has the final word regardless of drive detection
+if ($Sequential) {
+    $script:OptimalThrottleLimit = 1
+    $script:ThrottleReason = "User Forced (Sequential)"
 }
 
 # --- LOG FOLDER DEFINITION & CLEANUP ---
