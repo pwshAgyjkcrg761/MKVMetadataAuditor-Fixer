@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: MKVMetadataAuditor+Fixer.ps1
-# VERSION: 2026.06.13__13.03.00
+# VERSION: 2026.06.13__15.00.00
 # TARGET: PowerShell 7.6.2 LTS
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -72,6 +72,9 @@ param (
     [Alias("lfp")]
     [switch]$LogFullPath,
     
+    [Alias("seq")]
+    [switch]$Sequential,
+    
     [alias("SFTO", "SubTrackOrder", "TrackOrder")]
     [switch]$SubtitleFactorTrackOrder,
     
@@ -134,7 +137,7 @@ if ($FixNoBackup) { $Fix = $true }
 if ($DeepSubtitleAuditDebugExtraction -or $DeepSubtitleAuditLanguageDetectionLimit2 -or $DeepSubtitleAuditNOLanguageDetection) { $DeepSubtitleAudit = $true }
 
 # --- GLOBAL VERSION DEFINITION ---
-$scriptVersion = "2026.06.13__13.03.00"
+$scriptVersion = "2026.06.13__15.00.00"
 
 # --- VERSION REPORTER ---
 if ($Version) {
@@ -1267,6 +1270,14 @@ function Show-ProjectManual {
     "      if -FixNoBackup is active). This second pass confirms that all",
     "      Mismatch Groups have been resolved and that the resulting headers",
     "      now perfectly align with your requested configuration.`n"
+)    
+    
+    &$PrintManualBlock "  -Sequential | -seq" @(
+    "      Disables parallel processing and forces the script to analyze",
+    "      one file at a time. This is useful for troubleshooting performance",
+    "      issues, identifying specific file locks, or reducing system",
+    "      resource competition on legacy hardware.`n"
+
 )
 
     &$PrintManualBlock "  -DevDebug | -Dev | -DevD | -DBG" @(
@@ -1400,7 +1411,7 @@ if ($NoHwVideoSearch) {
     }
     
     # Define exactly what IS allowed
-    $allowedNoHwFlags = @('NoHwVideoSearch', 'Fast', 'disableRecurse', 'Path', 'nohw', 'PathParts', 'ep', 'excludePaths', 'LogFullPath', 'lfp', 'DevDebug')
+    $allowedNoHwFlags = @('NoHwVideoSearch', 'Fast', 'disableRecurse', 'Path', 'nohw', 'PathParts', 'ep', 'excludePaths', 'LogFullPath', 'lfp', 'DevDebug', 'Sequential', 'seq')
 
     # Check every flag the user actually typed
     foreach ($param in $PSBoundParameters.Keys) {
@@ -1505,16 +1516,25 @@ if (($null -eq $PathParts -or $PathParts.Count -eq 0) -and -not ($DelLog -or $Cl
 
 # --- THROTTLE LIMIT AUTO-TUNING ---
 $script:OptimalThrottleLimit = 4 # Default safe middle-ground
+$script:ThrottleReason = "Default (Conservative)"
+
+if ($Sequential) {
+    $script:OptimalThrottleLimit = 1
+    $script:ThrottleReason = "User Forced (Sequential)"
+}
+
 try {
     if ($inputPaths.Count -gt 0) {
         $targetDrive = $inputPaths[0]
         if ($targetDrive.StartsWith("\\")) {
             $script:OptimalThrottleLimit = 3 # Network share (UNC path)
+            $script:ThrottleReason = "Network (UNC Path)"
         } else {
             $rootPath = [System.IO.Path]::GetPathRoot($targetDrive)
             $driveInfo = [System.IO.DriveInfo]::new($rootPath)
             if ($driveInfo.DriveType -eq "Network") {
                 $script:OptimalThrottleLimit = 3 # Mapped network drive
+                $script:ThrottleReason = "Network (Mapped Drive)"
             } else {
                 # Local Drive: Query physical media type on Windows
                 if ($PSVersionTable.Platform -eq "Windows") {
@@ -1523,8 +1543,12 @@ try {
                         $targetMediaType = $disks | Select-Object -ExpandProperty MediaType -Unique
                         if ($targetMediaType -contains "SSD") {
                             $script:OptimalThrottleLimit = ([Environment]::ProcessorCount) # SSD: Full scaling
+                            $script:ThrottleReason = "Local SSD (Full Parallel)"
                         } elseif ($targetMediaType -contains "HDD") {
                             $script:OptimalThrottleLimit = 2 # HDD: Minimize thrashing
+                            $script:ThrottleReason = "Local HDD (Reduced Parallel)"
+                        } else {
+                            $script:ThrottleReason = "Local Disk (Generic)"
                         }
                     }
                 }
@@ -1867,7 +1891,10 @@ if ($hasOptions) {
         if ($LogFullPath) { Write-Host "  Full Path Log:" -NoNewline; Write-Host "On (-lfp)" -ForegroundColor DarkCyan  }
     }
 
-    if ($DevDebug) { Write-Host "  Global Debug: " -NoNewline; Write-Host "Active (-Dev)" -ForegroundColor DarkYellow }
+    if ($DevDebug) { 
+        Write-Host "  Global Debug: " -NoNewline; Write-Host "Active (-Dev)" -ForegroundColor DarkYellow 
+        Write-Host "  Parallel Tune:" -NoNewline; Write-Host " $script:OptimalThrottleLimit Threads ($script:ThrottleReason)" -ForegroundColor Gray
+    }
     
     Write-Host "--------------------------------------------------"
 }
