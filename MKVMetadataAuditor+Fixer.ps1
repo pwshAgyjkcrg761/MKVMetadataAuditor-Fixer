@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: MKVMetadataAuditor+Fixer.ps1
-# VERSION: 2026.06.12__17.39.00
+# VERSION: 2026.06.13__12.31.00
 # TARGET: PowerShell 7.6.2 LTS
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -128,7 +128,7 @@ if ($FixNoBackup) { $Fix = $true }
 if ($DeepSubtitleAuditDebugExtraction -or $DeepSubtitleAuditLanguageDetectionLimit2 -or $DeepSubtitleAuditNOLanguageDetection) { $DeepSubtitleAudit = $true }
 
 # --- GLOBAL VERSION DEFINITION ---
-$scriptVersion = "2026.06.12__17.39.00"
+$scriptVersion = "2026.06.13__12.31.00"
 
 # --- VERSION REPORTER ---
 if ($Version) {
@@ -243,6 +243,7 @@ function Get-MKVToolPaths {
         merge        = &$Resolve "mkvmerge.exe"
         extract      = &$Resolve "mkvextract.exe"
         mediainfoDll = &$Resolve "MediaInfo.dll"
+        mediainfoExe = &$Resolve "mediainfo.exe"
     }
 
     # Fallbacks
@@ -366,10 +367,27 @@ function Test-IsExcluded {
 function Test-IsNoHw {
     param(
         [string]$FilePath,
-        [string]$MediaInfoDllPath # Placeholder
+        [string]$MediaInfoDllPath,
+        [string]$MediaInfoExePath,
+        [switch]$DevDebug
     )
     
-    $handle = [MediaInfo]::MediaInfo_New()
+    # PATH EVALUATION: Identify long paths for CLI routing
+    $isLongPath = $FilePath.Length -ge 250
+    $miFilePath = $FilePath
+
+    $dllOpenSuccess = $false
+    $chroma  = ""
+    $space   = ""
+    $prof    = ""
+    $vFormat = ""
+
+    # ROUTE 1: MediaInfo.dll (Only for short paths)
+    if (-not $isLongPath) {
+        Write-Host "[DevDebug-NoHW] Routing to DLL (Length: $($FilePath.Length)) ↓↓↓" -ForegroundColor Gray
+        Write-Host "`n`nPath: $FilePath`n`n" -ForegroundColor Gray
+        
+        $handle = [MediaInfo]::MediaInfo_New()
     
     # Nested Helper for Safe String Marshalling
     $GetVal = {
@@ -380,50 +398,82 @@ function Test-IsNoHw {
     }
 
     try {
-        if ([MediaInfo]::MediaInfo_Open($handle, $FilePath) -eq 0) {
-             return [PSCustomObject]@{ IsNoHw = $false; IsReadable = $false; Error = "File Open Failed" }
-        }
+            # Note: DLL uses standard Path internally; prefixing handled by the DLL if supported
+            if ([MediaInfo]::MediaInfo_Open($handle, $FilePath) -ne 0) {
+                $dllOpenSuccess = $true
+                $vCountStr = &$GetVal $handle ([StreamKind]::General) 0 "VideoCount"
+                
+                if ([string]::IsNullOrWhiteSpace($vCountStr) -or $vCountStr -eq "0") {
+                     [MediaInfo]::MediaInfo_Close($handle); [MediaInfo]::MediaInfo_Delete($handle)
+                     return [PSCustomObject]@{ IsNoHw = $false; IsReadable = $false; Error = "No Video Tracks Found" }
+                }
 
-        $genFormat = &$GetVal $handle ([StreamKind]::General) 0 "Format"
-        $vCountStr = &$GetVal $handle ([StreamKind]::General) 0 "VideoCount"
+                $chroma  = &$GetVal $handle ([StreamKind]::Video) 0 "ChromaSubsampling"
+                $space   = &$GetVal $handle ([StreamKind]::Video) 0 "ColorSpace"
+                $prof    = &$GetVal $handle ([StreamKind]::Video) 0 "Format_Profile"
+                $vFormat = &$GetVal $handle ([StreamKind]::Video) 0 "Format"
+            }
+        } catch {} finally {
+            if ($dllOpenSuccess) { [MediaInfo]::MediaInfo_Close($handle) }
+            [MediaInfo]::MediaInfo_Delete($handle)
+        }
+    }
+
+    # ROUTE 2: MediaInfo.exe CLI (For long paths OR DLL failures)
+    if (-not $dllOpenSuccess -and $MediaInfoExePath) {
         
-        if ([string]::IsNullOrWhiteSpace($genFormat)) {
-             return [PSCustomObject]@{ IsNoHw = $false; IsReadable = $false; Error = "Unreadable Header/Corrupted" }
+        # Apply Extended-Length Prefixing for Windows CLI
+        if ($IsWindows -and $miFilePath -notlike "\\?\*") {
+            if ($miFilePath.StartsWith("\\")) {
+                $miFilePath = "\\?\UNC\" + $miFilePath.Substring(2)
+            } else {
+                $miFilePath = "\\?\" + $miFilePath
+            }
         }
 
-        if ([string]::IsNullOrWhiteSpace($vCountStr) -or $vCountStr -eq "0") {
-             return [PSCustomObject]@{ IsNoHw = $false; IsReadable = $false; Error = "No Video Tracks Found" }
+        if ($DevDebug) { 
+            $reason = if ($isLongPath) { "Long Path (Length: $($FilePath.Length))" } else { "DLL Open Failure" }
+            Write-Host "    [DevDebug-NoHW] Routing to CLI ($reason)" -ForegroundColor Gray
+            Write-Host "    [DevDebug-NoHW] Final CLI Path: $miFilePath" -ForegroundColor DarkGray
         }
+        try {
+            # Use -- to prevent '&' or other characters from being treated as operators
+            $raw = & $MediaInfoExePath --Output="Video;%Format_Profile%|%ChromaSubsampling%|%ColorSpace%|%Format%" -- $miFilePath 2>$null
+            if ($raw) {
+                $parts = $raw.Split('|')
+                if ($parts.Length -eq 4) {
+                    $prof    = $parts[0].Trim()
+                    $chroma  = $parts[1].Trim()
+                    $space   = $parts[2].Trim()
+                    $vFormat = $parts[3].Trim()
+                    $dllOpenSuccess = $true
+                }
+            }
+        } catch {}
+    }
 
-        $chroma  = &$GetVal $handle ([StreamKind]::Video) 0 "ChromaSubsampling"
-        $space   = &$GetVal $handle ([StreamKind]::Video) 0 "ColorSpace"
-        $prof    = &$GetVal $handle ([StreamKind]::Video) 0 "Format_Profile"
-        $vFormat = &$GetVal $handle ([StreamKind]::Video) 0 "Format"
+    if (-not $dllOpenSuccess) {
+        return [PSCustomObject]@{ IsNoHw = $false; IsReadable = $false; Error = "File Open Failed" }
+    }
 
-        $isHi10 = ($prof -match "High 10")
-        $is422  = ($chroma -eq "4:2:2")
-        $is444  = ($chroma -eq "4:4:4")
-        $isRGB  = ($space -eq "RGB")
+    $isHi10 = ($prof -match "High 10")
+    $is422  = ($chroma -eq "4:2:2")
+    $is444  = ($chroma -eq "4:4:4")
+    $isRGB  = ($space -eq "RGB")
 
-        return [PSCustomObject]@{ 
-            IsNoHw     = ($isHi10 -or $is444 -or $is422 -or $isRGB)
-            IsReadable = $true
-            Format     = $vFormat
-            Profile    = $prof
-            Chroma     = $chroma
-            Space      = $space
-            Flags      = @(
-                if ($isHi10) { "AVC Hi10P" }
-                if ($is422)  { "Chroma 4:2:2" }
-                if ($is444)  { "Chroma 4:4:4" }
-                if ($isRGB)  { "RGB" }
-            ) -join ', '
-        }
-    } catch {
-        return [PSCustomObject]@{ IsNoHw = $false; IsReadable = $false; Error = "DLL Memory Violation" }
-    } finally {
-        [MediaInfo]::MediaInfo_Close($handle)
-        [MediaInfo]::MediaInfo_Delete($handle)
+    return [PSCustomObject]@{ 
+        IsNoHw     = ($isHi10 -or $is444 -or $is422 -or $isRGB)
+        IsReadable = $true
+        Format     = $vFormat
+        Profile    = $prof
+        Chroma     = $chroma
+        Space      = $space
+        Flags      = @(
+            if ($isHi10) { "AVC Hi10P" }
+            if ($is422)  { "Chroma 4:2:2" }
+            if ($is444)  { "Chroma 4:4:4" }
+            if ($isRGB)  { "RGB" }
+        ) -join ', '
     }
 }
 
@@ -631,7 +681,7 @@ function Get-AuditSelector {
 }
 
 function Get-AuditFlags {
-    param($tracks, $IsWestern, $fixerConfig, $Honorifics, $SubtitlesHearingImpaired, $FilePath, $MediaInfoPath)
+    param($tracks, $IsWestern, $fixerConfig, $Honorifics, $SubtitlesHearingImpaired, $FilePath, $MediaInfoDllPath, $MediaInfoExePath)
     
     # Use Global Regex Patterns from Main Controller
     $RegexDiag = $script:RegexDiag
@@ -668,35 +718,13 @@ function Get-AuditFlags {
         $reasons += "⚠️👁️[Pref Subtitles NOT Default: $($prefSubLang.ToUpper())] "
     }
     
-        # --- DEEP VIDEO INSPECTION (NoHW Flags) ---
-    $miHandle = [MediaInfo]::MediaInfo_New()
-    
-    $GetVal = {
-        param($h, $kind, $id, $param)
-        $ptr = [MediaInfo]::MediaInfo_Get($h, $kind, $id, $param, [InfoKind]::Text, [InfoKind]::Name)
-        if ($ptr -ne [IntPtr]::Zero) { return [System.Runtime.InteropServices.Marshal]::PtrToStringUni($ptr) }
-        return ""
-    }
-
-    try {
-        if ([MediaInfo]::MediaInfo_Open($miHandle, $FilePath) -ne 0) {
-            $chroma  = &$GetVal $miHandle ([StreamKind]::Video) 0 "ChromaSubsampling"
-            $space   = &$GetVal $miHandle ([StreamKind]::Video) 0 "ColorSpace"
-            $prof    = &$GetVal $miHandle ([StreamKind]::Video) 0 "Format_Profile"
-            $vFormat = &$GetVal $miHandle ([StreamKind]::Video) 0 "Format"
-
-            if (-not [string]::IsNullOrWhiteSpace($vFormat)) {
-                if ($prof -match "High 10") { $reasons += "🔟 [NoHW: AVC Hi10P] " }
-                if ($chroma -eq "4:2:2")      { $reasons += "🎨 [NoHW: Chroma 4:2:2] " }
-                if ($chroma -eq "4:4:4")      { $reasons += "🎨 [NoHW: Chroma 4:4:4] " }
-                if ($space -eq "RGB")        { $reasons += "🌈 [NoHW: RGB] " }
-            }
-            [MediaInfo]::MediaInfo_Close($miHandle)
-        }
-    } catch {
-        # Log suppression for memory faults in corrupted files
-    } finally {
-        [MediaInfo]::MediaInfo_Delete($miHandle)
+        # --- DEEP VIDEO INSPECTION (NoHW Flags via Unified Logic) ---
+    $noHwStatus = Test-IsNoHw -FilePath $FilePath -MediaInfoDllPath $MediaInfoDllPath -MediaInfoExePath $MediaInfoExePath
+    if ($noHwStatus.IsReadable -and $noHwStatus.IsNoHw) {
+        if ($noHwStatus.Profile -match "High 10") { $reasons += "🔟 [NoHW: AVC Hi10P] " }
+        if ($noHwStatus.Chroma -eq "4:2:2")       { $reasons += "🎨 [NoHW: Chroma 4:2:2] " }
+        if ($noHwStatus.Chroma -eq "4:4:4")       { $reasons += "🎨 [NoHW: Chroma 4:4:4] " }
+        if ($noHwStatus.Space -eq "RGB")         { $reasons += "🌈 [NoHW: RGB] " }
     }
 
     if ($tracks | Where-Object { $_.properties.forced_track }) { $reasons += "🚨[Forced Track] " }
@@ -1396,6 +1424,7 @@ $mkvpropedit  = $tools.propedit
 $mkvmerge     = $tools.merge
 $mkvextract   = $tools.extract
 $mediainfoDll = $tools.mediainfoDll
+$mediainfoExe = $tools.mediainfoExe
 
 # --- FINAL VALIDATION ---
 $missingTools = New-Object System.Collections.Generic.List[string]
@@ -1409,6 +1438,13 @@ if (-not $dllExists) {
     $dllExists = @($env:Path.Split(';', [System.StringSplitOptions]::RemoveEmptyEntries) | Where-Object { Test-Path (Join-Path $_ "MediaInfo.dll") }).Count -gt 0
 }
 if (-not $dllExists) { [void]$missingTools.Add("MediaInfo.dll (MediaInfo)") }
+
+# [MOD] NoHw Mode: Require MediaInfo CLI for Long Path routing
+if ($NoHwVideoSearch) {
+    if ([string]::IsNullOrWhiteSpace($mediainfoExe) -or -not (Test-Path -LiteralPath $mediainfoExe)) {
+        [void]$missingTools.Add("mediainfo.exe (CLI required for Long Path support)")
+    }
+}
 
 # 2. Unified Missing Report (Decision point)
 if ($missingTools.Count -gt 0) {
@@ -1436,7 +1472,8 @@ if ($DevDebug) {
     Write-Host "  -> mkvmerge:    $mkvmerge" -ForegroundColor Gray
     Write-Host "  -> mkvpropedit: $mkvpropedit" -ForegroundColor Gray
     Write-Host "  -> mkvextract:  $mkvextract" -ForegroundColor Gray
-    Write-Host "  -> MediaInfo:   $mediainfoDll`n" -ForegroundColor Gray
+    Write-Host "  -> MediaInfo DLL: $mediainfoDll" -ForegroundColor Gray
+    Write-Host "  -> MediaInfo CLI: $mediainfoExe`n" -ForegroundColor Gray
 }
 
 if ($PSVersionTable.PSVersion -lt [version]"7.6.2") {
@@ -2154,7 +2191,7 @@ foreach ($folderPath in $targetFolders) {
                 $mediainfoDllPath = $using:mediainfoDll
                 $testIsNoHwSb = [scriptblock]::Create($using:testIsNoHwDef)
                 
-                $status = &$testIsNoHwSb -FilePath $f.FullName -MediaInfoPath $mediainfoDllPath
+                $status = &$testIsNoHwSb -FilePath $f.FullName -MediaInfoDllPath $mediainfoDllPath -MediaInfoExePath $using:mediainfoExe -DevDebug:$using:DevDebug
                 
                 [PSCustomObject]@{
                     FullName = $f.FullName
@@ -2256,7 +2293,7 @@ foreach ($folderPath in $targetFolders) {
             $testIsNoHwSb = [scriptblock]::Create($using:testIsNoHwDef)
 
             $json = & $mkvmergePath -J $f.FullName | ConvertFrom-Json
-            $noHwStatus = &$testIsNoHwSb -FilePath $f.FullName -MediaInfoPath $mediainfoDllPath
+            $noHwStatus = &$testIsNoHwSb -FilePath $f.FullName -MediaInfoDllPath $mediainfoDllPath -MediaInfoExePath $using:mediainfoExe -DevDebug:$using:DevDebug
 
             [PSCustomObject]@{
                 FullName   = $f.FullName
@@ -2362,7 +2399,7 @@ foreach ($folderPath in $targetFolders) {
             $stableIndex = $global:GroupMap[$sig]
             $isPrimary = ($g -eq 0)
             $repFile = $currentGroup.Files[0]
-            $reasons = Get-AuditFlags -tracks $currentGroup.Json.tracks -IsWestern $Western -fixerConfig $fixerConfig -Honorifics $Honorifics -SubtitlesHearingImpaired $SubtitlesHearingImpaired -FilePath $repFile.FullName -MediaInfoPath $mediainfoDll
+            $reasons = Get-AuditFlags -tracks $currentGroup.Json.tracks -IsWestern $Western -fixerConfig $fixerConfig -Honorifics $Honorifics -SubtitlesHearingImpaired $SubtitlesHearingImpaired -FilePath $repFile.FullName -MediaInfoDllPath $mediainfoDll -MediaInfoExePath $mediainfoExe
 
             
             $entry = New-Object System.Collections.Generic.List[string]
