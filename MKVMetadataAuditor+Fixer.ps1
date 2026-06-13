@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: MKVMetadataAuditor+Fixer.ps1
-# VERSION: 2026.06.13__12.31.00
+# VERSION: 2026.06.13__13.03.00
 # TARGET: PowerShell 7.6.2 LTS
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -12,9 +12,11 @@
 # ==============================================================================
 # <PROTECTED>
 # ==============================================================================
-# AI INSTRUCTIONS v2026.06.11__14.12.27 : 
+# AI INSTRUCTIONS v2026.06.13__13.53.01 : 
 # 1. HEADER: Update Version comment.
-#    - VERSIONING: Update using CHICAGO TIME (Central Time), 24 hour clock. 
+#    - VERSIONING: Update using CHICAGO TIME (Central Time), 24 hour clock.
+#    - OUTPUT: When printing the updated version, only provide the new version
+#      number. Do not describe the change as complex or explain the edit.
 #    - CRITICAL: Do not use AI system time. Use the time provided in the most 
 #      recent user prompt or link (Ref: https://www.timeanddate.com/worldclock/usa/chicago).
 #    - STAMP ACCURACY: Ensure the minutes match the current Chicago clock exactly.
@@ -35,6 +37,10 @@
 #   - Do not summarize, truncate, or refactor the existing code used as an anchor.
 #   - Copy spaces, comments, and symbols exactly as they appear in the file.
 #   - Keep anchors and replacement snippets as small and precise as possible to isolate only the necessary change.
+#
+# 5. CONTENT PRESERVATION:
+#    - Do not remove, modify, or strip out telemetry data or DevDebug information 
+#      from any provided code.
 # ==============================================================================
 # </PROTECTED>
 
@@ -128,7 +134,7 @@ if ($FixNoBackup) { $Fix = $true }
 if ($DeepSubtitleAuditDebugExtraction -or $DeepSubtitleAuditLanguageDetectionLimit2 -or $DeepSubtitleAuditNOLanguageDetection) { $DeepSubtitleAudit = $true }
 
 # --- GLOBAL VERSION DEFINITION ---
-$scriptVersion = "2026.06.13__12.31.00"
+$scriptVersion = "2026.06.13__13.03.00"
 
 # --- VERSION REPORTER ---
 if ($Version) {
@@ -384,8 +390,10 @@ function Test-IsNoHw {
 
     # ROUTE 1: MediaInfo.dll (Only for short paths)
     if (-not $isLongPath) {
-        Write-Host "[DevDebug-NoHW] Routing to DLL (Length: $($FilePath.Length)) ↓↓↓" -ForegroundColor Gray
-        Write-Host "`n`nPath: $FilePath`n`n" -ForegroundColor Gray
+        if ($DevDebug) {
+            Write-Host "[DevDebug-NoHW] Routing to DLL (Length: $($FilePath.Length)) ↓↓↓" -ForegroundColor Gray
+            Write-Host "`n`nPath: $FilePath`n`n" -ForegroundColor Gray
+        }
         
         $handle = [MediaInfo]::MediaInfo_New()
     
