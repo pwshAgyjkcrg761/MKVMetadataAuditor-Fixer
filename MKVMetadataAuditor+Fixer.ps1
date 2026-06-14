@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: MKVMetadataAuditor+Fixer.ps1
-# VERSION: 2026.06.13__22.15.00
+# VERSION: 2026.06.14__11.41.00
 # TARGET: PowerShell 7.6.2 LTS
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -137,7 +137,7 @@ if ($FixNoBackup) { $Fix = $true }
 if ($DeepSubtitleAuditDebugExtraction -or $DeepSubtitleAuditLanguageDetectionLimit2 -or $DeepSubtitleAuditNOLanguageDetection) { $DeepSubtitleAudit = $true }
 
 # --- GLOBAL VERSION DEFINITION ---
-$scriptVersion = "2026.06.13__22.15.00"
+$scriptVersion = "2026.06.14__11.41.00"
 
 # --- VERSION REPORTER ---
 if ($Version) {
@@ -1515,51 +1515,9 @@ if (($null -eq $PathParts -or $PathParts.Count -eq 0) -and -not ($DelLog -or $Cl
     }
 }
 
-# --- THROTTLE LIMIT AUTO-TUNING ---
-$script:OptimalThrottleLimit = 4 # Default safe middle-ground
-$script:ThrottleReason = "Default (Conservative)"
+# (Block moved for diagnostic capture)
 
-try {
-    if ($inputPaths.Count -gt 0) {
-        $targetDrive = $inputPaths[0]
-        if ($targetDrive.StartsWith("\\")) {
-            $script:OptimalThrottleLimit = 3 # Network share (UNC path)
-            $script:ThrottleReason = "Network (UNC Path)"
-        } else {
-            $rootPath = [System.IO.Path]::GetPathRoot($targetDrive)
-            $driveInfo = [System.IO.DriveInfo]::new($rootPath)
-            if ($driveInfo.DriveType -eq "Network") {
-                $script:OptimalThrottleLimit = 3 # Mapped network drive
-                $script:ThrottleReason = "Network (Mapped Drive)"
-            } else {
-                # Local Drive: Query physical media type on Windows
-                if ($PSVersionTable.Platform -eq "Windows") {
-                    $disks = Get-PhysicalDisk -ErrorAction SilentlyContinue
-                    if ($disks) {
-                        $targetMediaType = $disks | Select-Object -ExpandProperty MediaType -Unique
-                        if ($targetMediaType -contains "SSD") {
-                            $script:OptimalThrottleLimit = ([Environment]::ProcessorCount) # SSD: Full scaling
-                            $script:ThrottleReason = "Local SSD (Full Parallel)"
-                        } elseif ($targetMediaType -contains "HDD") {
-                            $script:OptimalThrottleLimit = 2 # HDD: Minimize thrashing
-                            $script:ThrottleReason = "Local HDD (Reduced Parallel)"
-                        } else {
-                            $script:ThrottleReason = "Local Disk (Generic)"
-                        }
-                    }
-                }
-            }
-        }
-    }
-} catch {
-    $script:OptimalThrottleLimit = 4
-}
-
-# Final User Override: Ensure -Sequential has the final word regardless of drive detection
-if ($Sequential) {
-    $script:OptimalThrottleLimit = 1
-    $script:ThrottleReason = "User Forced (Sequential)"
-}
+# (Sequential override moved to hardware tuning block)
 
 # --- LOG FOLDER DEFINITION & CLEANUP ---
 # Define all directory variables
@@ -1606,6 +1564,86 @@ $terminalLog = Join-Path $tLogDir "MKVMetadataAuditor+Fixer_DevDebug-Terminal_$(
 if ($DevDebug) {
     Start-Transcript -Path $terminalLog -Append -Force | Out-Null
 }
+
+# --- THROTTLE LIMIT AUTO-TUNING ---
+$script:OptimalThrottleLimit = 4 
+$script:ThrottleReason = "Default (Conservative)"
+
+if ($DevDebug) { Write-Host "`n [DevDebug-Tuning] Probe Start..." -ForegroundColor DarkCyan }
+
+try {
+    if ($inputPaths.Count -gt 0) {
+        $path = $inputPaths[0]
+        if ($DevDebug) { Write-Host " [DevDebug-Tuning] Path: $path" -ForegroundColor Gray }
+
+        if ($path.StartsWith("\\")) {
+            $script:OptimalThrottleLimit = 3
+            $script:ThrottleReason = "Network (UNC Path)"
+        } else {
+            $root = [System.IO.Path]::GetPathRoot($path)
+            $drive = [System.IO.DriveInfo]::new($root)
+            if ($DevDebug) { Write-Host " [DevDebug-Tuning] Root: $root | Type: $($drive.DriveType)" -ForegroundColor Gray }
+
+            if ($drive.DriveType -eq "Network") {
+                $script:OptimalThrottleLimit = 3
+                $script:ThrottleReason = "Network (Mapped Drive)"
+            } elseif ($IsWindows) {
+                $id = $root.TrimEnd('\')
+                # Chain: LogicalDisk -> Partition -> DiskDrive
+                $p = Get-CimInstance -Query "Associators of {Win32_LogicalDisk.DeviceID='$id'} where AssocClass=Win32_LogicalDiskToPartition" -ErrorAction SilentlyContinue
+                $d = Get-CimInstance -Query "Associators of {Win32_DiskPartition.DeviceID='$($p.DeviceID)'} where AssocClass=Win32_DiskDriveToDiskPartition" -ErrorAction SilentlyContinue
+                
+                if ($null -ne $d.Index) {
+                    if ($DevDebug) { Write-Host " [DevDebug-Tuning] CIM Map: Part:$($p.DeviceID) | Index:$($d.Index)" -ForegroundColor Gray }
+                    $phys = Get-PhysicalDisk | Where-Object { "$($_.DeviceId)" -eq "$($d.Index)" } -ErrorAction SilentlyContinue
+                    
+                    if ($phys) {
+                        $bus = "$($phys.BusType)"
+                        $media = "$($phys.MediaType)"
+                        if ($DevDebug) { Write-Host " [DevDebug-Tuning] StorageAPI: $($phys.FriendlyName) | Bus:$bus | Media:$media | Spindle:$($phys.SpindleSpeed)" -ForegroundColor Gray }
+                        
+                        $isUSB = $bus -match "USB"
+                        $isExplicitSSD = $media -match "SSD"
+                        
+                        if ($isUSB) {
+                            # USB Skepticism: USB bridges often report Spindle:0 for mechanical HDDs.
+                            # We only allow full parallel on USB if the Media is explicitly "SSD".
+                            $isFast = $isExplicitSSD
+                            if ($DevDebug) { Write-Host " [DevDebug-Tuning] USB Device Logic: Explicit SSD Required -> Match: $isFast" -ForegroundColor Gray }
+                        } else {
+                            # Internal (SATA/NVMe): Trust SpindleSpeed and BusType
+                            $isFast = ($phys.SpindleSpeed -eq 0) -or $isExplicitSSD -or ($bus -match "NVMe|SSD")
+                        }
+
+                        if ($isFast) {
+                            $script:OptimalThrottleLimit = [Environment]::ProcessorCount
+                            $script:ThrottleReason = "Local SSD/NVMe (Full Parallel)"
+                        } else {
+                            $script:OptimalThrottleLimit = 2
+                            $script:ThrottleReason = "Local HDD (Reduced Parallel)"
+                        }
+                    } else {
+                        if ($DevDebug) { Write-Host " [DevDebug-Tuning] StorageAPI failed for index $($d.Index)" -ForegroundColor DarkYellow }
+                        $script:ThrottleReason = "Local Disk (Generic)"
+                    }
+                } else {
+                    if ($DevDebug) { Write-Host " [DevDebug-Tuning] CIM mapping failed for drive $id" -ForegroundColor DarkYellow }
+                    $script:ThrottleReason = "Local Disk (WMI Map Fail)"
+                }
+            }
+        }
+    }
+} catch {
+    if ($DevDebug) { Write-Host " [DevDebug-Tuning] ERROR: $($_.Exception.Message)" -ForegroundColor Red }
+}
+
+# Final User Override: Ensure -Sequential has the final word regardless of drive detection
+if ($Sequential) {
+    $script:OptimalThrottleLimit = 1
+    $script:ThrottleReason = "User Forced (Sequential)"
+}
+
+if ($DevDebug) { Write-Host " [DevDebug-Tuning] Final Selection: $script:OptimalThrottleLimit Threads | Reason: $script:ThrottleReason`n" -ForegroundColor DarkCyan }
 
 # --- GLOBAL TEMP CONFIGURATION ---
 $script:GlobalTemp = Join-Path $env:TEMP "MKVMetadataAuditor+Fixer"
@@ -2576,7 +2614,7 @@ foreach ($folderPath in $targetFolders) {
 
         # --- PARALLEL DSA PRE-CALCULATION PHASE ---
         $dsaLookupMap = @{}
-        if ($DeepSubtitleAudit) {
+        if ($DeepSubtitleAudit -and ($CurrentJob.Mode -ne "Verification" -or $DevDebug)) {
             $parentGlobalTemp = $script:GlobalTemp
             $getSubtitleExtensionDef = [string]${function:Get-SubtitleExtension}
             $extractDialogueTextDef = [string]${function:Extract-DialogueText}
@@ -2914,7 +2952,7 @@ foreach ($folderPath in $targetFolders) {
                         
                         
                         # --- [DSA] DEEP SUBTITLE AUDIT ENGINE (LOG & DIALOGUE UPDATE) ---
-                        if ($DeepSubtitleAudit -and -not $dsaFileProcessed) {
+                        if ($DeepSubtitleAudit -and -not $dsaFileProcessed -and ($CurrentJob.Mode -ne "Verification" -or $DevDebug)) {
                             $dsaFileProcessed = $true
                             $fileGuid = "DSA_" + $fToFix.Name.GetHashCode().ToString('X')
                             
