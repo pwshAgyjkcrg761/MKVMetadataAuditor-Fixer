@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: MKVMetadataAuditor+Fixer.ps1
-# VERSION: 2026.06.13__16.48.00
+# VERSION: 2026.06.13__22.15.00
 # TARGET: PowerShell 7.6.2 LTS
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -137,7 +137,7 @@ if ($FixNoBackup) { $Fix = $true }
 if ($DeepSubtitleAuditDebugExtraction -or $DeepSubtitleAuditLanguageDetectionLimit2 -or $DeepSubtitleAuditNOLanguageDetection) { $DeepSubtitleAudit = $true }
 
 # --- GLOBAL VERSION DEFINITION ---
-$scriptVersion = "2026.06.13__16.48.00"
+$scriptVersion = "2026.06.13__22.15.00"
 
 # --- VERSION REPORTER ---
 if ($Version) {
@@ -878,21 +878,22 @@ function Get-TrackScore {
 
     # 4. Honorifics Scoring
     if ($Honorifics) {
-        $honMatchRegex = "(?<!no\s|non-|without\s|removed\s|no-)(honorific|honor)"
-        $isHon = ($trackName -match $honMatchRegex) -or ($trackLang -eq "enm") -or ($t.DSA_DetectedLang -eq "enm")
-        if ($isHon) { 
-            $score += 300 
-            [void]$ruleLog.Add("Honorifics(+300)")
+        $isNameMatch = ($trackName -match $script:RegexHon)
+        $isProvenHon = ($trackLang -eq "enm" -or $t.DSA_DetectedLang -eq "enm")
+        
+        if ($isNameMatch -or $isProvenHon) { 
+            $hScore = 300
+            if ($isProvenHon) { $hScore += 50 } # Tie-breaker for DSA verified tracks
+            $score += $hScore 
+            $label = if ($isProvenHon) { "Honorifics_Detected(+$hScore)" } else { "Honorifics_Name(+$hScore)" }
+            [void]$ruleLog.Add($label)
         }
     }
 
     # 5. Language Scoring
     $isPrefLang = ($trackLang -eq $fixerConfig.Subtitles.PreferredLanguage)
-    $honRegex = "(?<!no\s|non-|without\s|removed\s|no-)(honorific|honor)"
     $dsaDetected = $t.DSA_DetectedLang
-    # [MOD] Prioritize Detection over Header: Since headers are normalized to 'eng', 
-    # we rely on DSA's 'enm' detection or honorific name keywords to trigger the bonus.
-    $isHonorificsTrack = ($trackLang -eq "enm") -or ($dsaDetected -eq "enm") -or ($trackName -match $honRegex)
+    $isHonorificsTrack = ($trackLang -eq "enm" -or $dsaDetected -eq "enm" -or $trackName -match $script:RegexHon)
     
     if (-not $isPrefLang -and $Honorifics -and $fixerConfig.Subtitles.PreferredLanguage -eq "eng" -and $isHonorificsTrack) {
         $isPrefLang = $true
@@ -1730,6 +1731,10 @@ $script:RegexDiag = "Dialog|Full|Japanese Audio|Main"
 # Streamlined Sign logic: Opening/Ending/OP/ED added.
 # Added word boundaries (\b) to OP and ED to prevent matching strings like "Modified" or "Styled".
 $script:RegexSign = "Sign|Song|Lyric|Opening|Ending|\bOP\b|\bED\b|Partial|Forced|Translation|ASSR|S&S|S\s&\sS|Dubtitle"
+
+# [2026.06.13] Centralized Honorifics & Sanitizer
+$script:RegexHon = "(?<!\b(?:no|non|without|removed)[-\s(]*)(?:honorific|honor)"
+$script:RegexSanitizer = "(?i)\b(full|dialogue|dialog|honorifics?|honor|signs|songs|english|eng|subs|subtitles|main|lyrics|translated|translation|with|without)\b"
 
 # 2. APPLY OVERRIDES FROM COMMAND LINE
 # Ensure the Video object exists in the defaults
@@ -2660,7 +2665,10 @@ foreach ($folderPath in $targetFolders) {
                             $probeMap = @{}
                             foreach ($sub in $allSubs) {
                                 $isImageSub = ($sub.codec -match "PGS|VobSub")
-                                if ($isImageSub -and $allSubs.Count -gt 2) { continue }
+                                if ($isImageSub -and $allSubs.Count -gt 2) {
+                                    if ($devDebugActive) { Write-Host "  [DevDebug-DSA] Skip Extraction: ID:$($sub.id) is Picture Sub and file has >2 tracks." -ForegroundColor DarkGray }
+                                    continue 
+                                }
                                 
                                 $ext = &$getExtSb -Codec $sub.codec
                                 $tmpPath = Join-Path $tempDir "track$($sub.id + 1).$ext"
@@ -2686,7 +2694,8 @@ foreach ($folderPath in $targetFolders) {
                                         } elseif ($allSubs.Count -gt 2) {
                                             $maxNeeded = 15000
                                         }
-                                        $cleanText = &$extractDialogueSb -Path $probeFile -OutPath $null -DevDebug:$devDebugActive -MaxLength $maxNeeded
+                                        $cleanOut = if ($devDebugActive) { Join-Path $tempDir "track$($sub.id + 1)_cleaned.txt" } else { $null }
+                                        $cleanText = &$extractDialogueSb -Path $probeFile -OutPath $cleanOut -DevDebug:$devDebugActive -MaxLength $maxNeeded
                                         
                                         # Parallel Language Detection Logic
                                         if (-not $dsaNoLng) {
@@ -3145,12 +3154,12 @@ foreach ($folderPath in $targetFolders) {
                                 # --- STAGE 3: DECISION LOGIC (SINGLE TRACK VALIDATION) ---
                                 
                                 # Aggressive Role Sanitization Filter
-                                $roleFilter = "(?i)\b(full|dialogue|dialog|honorifics?|honor|signs|songs|english|eng|subs|subtitles|main|lyrics|translated|translation)\b"
+                                $roleFilter = $script:RegexSanitizer
                                 $SanitizeName = { param($n) ($n -replace $roleFilter, ' ' -replace '[\(\)\[\]\{\}\-\.\:\&\+]', ' ').Trim() -replace '\s+', ' ' }
 
                                 # Phase A: Universal Honorifics & Language Normalization (ALL tracks)
                                 foreach ($tH in $ambiguousTracks) {
-                                    $isHonDet = ($tH.DSA_DetectedLang -eq "enm" -or $tH.properties.language -eq "enm" -or $tH.properties.track_name -match "(?i)honorific|honor")
+                                    $isHonDet = ($tH.DSA_DetectedLang -eq "enm" -or $tH.properties.language -eq "enm" -or $tH.properties.track_name -match $script:RegexHon)
                                     if ($isHonDet) {
                                         $curName = if ($tH.properties.track_name) { $tH.properties.track_name } else { "" }
                                         
@@ -3158,12 +3167,16 @@ foreach ($folderPath in $targetFolders) {
                                         if ($tH.properties.language -ne "eng") {
                                             $needsChange = $true
                                             if ($Fix) { $Params += @('--edit', "track:$($tH.id + 1)", '--set', "language=eng") }
+                                            $tH.properties.language = "eng"
                                         }
 
-                                        # 2. Smart Naming: Standardize via Sanitization
-                                        # First, extract group by stripping role keywords
+                                        # 2. Truth-Based Naming: If bitstream proved standard English, demote 'Honorifics' liar.
                                         $cleanGroupName = &$SanitizeName $curName
-                                        $newName = if ([string]::IsNullOrWhiteSpace($cleanGroupName)) { "Honorifics Full Dialogue" } else { "Honorifics Full Dialogue [$cleanGroupName]" }
+                                        $prefix = if ($tH.DSA_DetectedLang -eq "enm") { "Honorifics Full Dialogue" }
+                                                  elseif ($tH.DSA_DetectedLang -eq "eng") { "Full Dialogue" }
+                                                  else { "Honorifics Full Dialogue" } # Trust name for picture subs/skipped scans
+                                        
+                                        $newName = if ([string]::IsNullOrWhiteSpace($cleanGroupName)) { $prefix } else { "$prefix [$cleanGroupName]" }
                                         
                                         # Final Comparison: Only update if standardized name differs from current name
                                         if ($newName -ne $curName) {
@@ -3253,7 +3266,7 @@ foreach ($folderPath in $targetFolders) {
                                         
                                         if ($ratio -ge $dynRatio -and $isDualEng) {
                                             # Aggressive Role Filtering
-                                            $roleFilter = "(?i)\b(full|dialogue|dialog|honorifics|honor|signs|songs|english|eng|subs|subtitles|main|lyrics|translated|translation)\b"
+                                            $roleFilter = $script:RegexSanitizer
 
                                             # Check handled status (Phase A)
                                             $handledL = $largeTrack.properties.DSA_Handled
