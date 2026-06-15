@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: MKVMetadataAuditor+Fixer.ps1
-# VERSION: 2026.06.15__10.46.00
+# VERSION: 2026.06.15__13.12.00
 # TARGET: PowerShell 7.6.2 LTS
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -137,7 +137,7 @@ if ($FixNoBackup) { $Fix = $true }
 if ($DeepSubtitleAuditDebugExtraction -or $DeepSubtitleAuditLanguageDetectionLimit2 -or $DeepSubtitleAuditNOLanguageDetection) { $DeepSubtitleAudit = $true }
 
 # --- GLOBAL VERSION DEFINITION ---
-$scriptVersion = "2026.06.15__10.46.00"
+$scriptVersion = "2026.06.15__13.12.00"
 
 # --- VERSION REPORTER ---
 if ($Version) {
@@ -553,13 +553,13 @@ function Detect-SubtitleLanguage {
     if ($DevDebug) {
         $pKor = [Math]::Round(($korCount / $total) * 100, 2); $pJpn = [Math]::Round(($jpnCount / $total) * 100, 2); $pChi = [Math]::Round(($chiCount / $total) * 100, 2)
         Write-Host "      -> Metrics: Chars Analyzed: $total" -ForegroundColor Gray
-        # Write-Host "      -> Script Density: Korean: $pKor% | Japanese: $pJpn% | Chinese: $pChi%" -ForegroundColor Gray
-        Write-Host "      -> Script Density: Chinese: $pChi% | Japanese: $pJpn% | Korean: $pKor%" -ForegroundColor Gray
+        Write-Host "      -> Script Density: Korean: $pKor% | Japanese: $pJpn% | Chinese: $pChi%" -ForegroundColor Gray
+        
     }
 
-    if ($korCount / $total -gt 0.15) { if ($DevDebug) { Write-Host "      -> MATCH: Korean (Hangul)" -ForegroundColor Green }; return "kor" }
-    if ($jpnCount / $total -gt 0.05) { if ($DevDebug) { Write-Host "      -> MATCH: Japanese (Kana)" -ForegroundColor Green }; return "jpn" }
-    if ($chiCount / $total -gt 0.15) { if ($DevDebug) { Write-Host "      -> MATCH: Chinese (Han)" -ForegroundColor Green }; return "chi" }
+    if ($korCount / $total -gt 0.15) { if ($DevDebug) { Write-Host "      -> MATCH: Korean (Hangul)" -ForegroundColor Green }; return "kor:0" }
+    if ($jpnCount / $total -gt 0.05) { if ($DevDebug) { Write-Host "      -> MATCH: Japanese (Kana)" -ForegroundColor Green }; return "jpn:0" }
+    if ($chiCount / $total -gt 0.15) { if ($DevDebug) { Write-Host "      -> MATCH: Chinese (Han)" -ForegroundColor Green }; return "chi:0" }
 
     
     # 2. Latin-Based Language Detection
@@ -586,15 +586,15 @@ function Detect-SubtitleLanguage {
         if ($isEnglish) {
             if ($Honorifics -and $honMatches -ge 1) { 
                 if ($DevDebug) { Write-Host "      -> MATCH: English (Japanese Honorifics) [enm] (Header: eng)" -ForegroundColor Green }
-                return "enm" 
+                return "enm:$honMatches" 
             }
             if ($DevDebug) { Write-Host "      -> MATCH: English [eng]" -ForegroundColor Green }
-            return "eng" 
+            return "eng:0" 
         }
 
         # Safety Fallback
         if ($DevDebug) { Write-Host "      -> NO MATCH: Fallback to header language ($CurrentLang)" -ForegroundColor DarkYellow }
-        return $CurrentLang
+        return "$CurrentLang:0"
     }
     return "und"
 }
@@ -884,11 +884,16 @@ function Get-TrackScore {
         $isNameMatch = ($trackName -match $script:RegexHon)
         $isProvenHon = ($trackLang -eq "enm" -or $t.DSA_DetectedLang -eq "enm")
         
+        $densityBonus = if ($t.DSA_HonCount) { $t.DSA_HonCount } else { 0 }
+        
         if ($isNameMatch -or $isProvenHon) { 
             $hScore = 300
             if ($isProvenHon) { $hScore += 50 } # Tie-breaker for DSA verified tracks
+            $hScore += $densityBonus            # Add linguistic density bonus
+            
             $score += $hScore 
             $label = if ($isProvenHon) { "Honorifics_Detected(+$hScore)" } else { "Honorifics_Name(+$hScore)" }
+            if ($densityBonus -gt 0) { $label += "[Density:+$densityBonus]" }
             [void]$ruleLog.Add($label)
         }
     }
@@ -2752,14 +2757,21 @@ foreach ($folderPath in $targetFolders) {
                                             $subIdx = [array]::IndexOf($allSubs, $sub) + 1
                                             $tmpSel = "s$subIdx"
                                             $sampleText = if ($cleanText.Length -gt 15000) { $cleanText.Substring(0, 15000) } else { $cleanText }
-                                            $detected = &$detectLanguageSb -Text $sampleText `
-                                                                           -CurrentLang $sub.properties.language `
-                                                                           -Honorifics:$honorificsActive `
-                                                                           -DevDebug:$devDebugActive `
-                                                                           -TrackID $sub.id `
-                                                                           -Selector $tmpSel `
-                                                                           -TrackName $sub.properties.track_name
+                                            $rawDetected = &$detectLanguageSb -Text $sampleText `
+                                                                              -CurrentLang $sub.properties.language `
+                                                                              -Honorifics:$honorificsActive `
+                                                                              -DevDebug:$devDebugActive `
+                                                                              -TrackID $sub.id `
+                                                                              -Selector $tmpSel `
+                                                                              -TrackName $sub.properties.track_name
                                             
+                                            $detectedParts = $rawDetected.Split(':')
+                                            $detected = $detectedParts[0]
+                                            $honCount = [int]$detectedParts[1]
+
+                                            if ($honCount -gt 0) {
+                                                $sub | Add-Member -NotePropertyName "DSA_HonCount" -NotePropertyValue $honCount -Force
+                                            }
                                             $detectedLangs[$sub.id] = $detected
                                         }
                                         $weights[$sub.id] = $cleanText.Length
@@ -2782,7 +2794,7 @@ foreach ($folderPath in $targetFolders) {
                                     $isResolved = $true
                                 } else {
                                     if ($devDebugActive) {
-                                        Write-Host "  [DevDebug-DSA] Ratio too low ($($bRatio.ToString('F2'))). Skipping Naming logic." -ForegroundColor DarkGray
+                                        Write-Host "  [DevDebug-DSA] Full Dialogue vs. Signs & Songs: Ratio too low ($($bRatio.ToString('F2'))). Skipping Naming logic." -ForegroundColor DarkGray
                                     }
                                 }
                             }
@@ -3155,13 +3167,21 @@ foreach ($folderPath in $targetFolders) {
                                                             $tmpSel = "s$subIdx"
 
                                                             $sampleText = if ($cleanText.Length -gt 15000) { $cleanText.Substring(0, 15000) } else { $cleanText }
-                                                            $detected = Detect-SubtitleLanguage -Text $sampleText `
-                                                                                                -CurrentLang $sub.properties.language `
-                                                                                                -Honorifics:$Honorifics `
-                                                                                                -DevDebug:$DevDebug `
-                                                                                                -TrackID $sub.id `
-                                                                                                -Selector $tmpSel `
-                                                                                                -TrackName $sub.properties.track_name
+                                                            $rawDetected = Detect-SubtitleLanguage -Text $sampleText `
+                                                                                                    -CurrentLang $sub.properties.language `
+                                                                                                    -Honorifics:$Honorifics `
+                                                                                                    -DevDebug:$DevDebug `
+                                                                                                    -TrackID $sub.id `
+                                                                                                    -Selector $tmpSel `
+                                                                                                    -TrackName $sub.properties.track_name
+                                                            
+                                                            $detectedParts = $rawDetected.Split(':')
+                                                            $detected = $detectedParts[0]
+                                                            $honCount = [int]$detectedParts[1]
+
+                                                            if ($honCount -gt 0) {
+                                                                $sub | Add-Member -NotePropertyName "DSA_HonCount" -NotePropertyValue $honCount -Force
+                                                            }
 
                                                             # [FIX] Oscillation Prevention: Treat 'eng' and 'enm' as equivalent matches.
                                                             $isEngEnmEquivalent = ($sub.properties.language -match "eng|enm" -and $detected -match "eng|enm")
@@ -3494,7 +3514,13 @@ foreach ($folderPath in $targetFolders) {
                     [void]$fixDetails.Add("  [DevDebug-Fixer] Subtitle Scoring Breakdown:")
                     foreach ($cand in ($subCandidates | Sort-Object Score -Descending)) {
                         # [CHANGE] v2026.06.15__09.22.41 - Include Track in scoring debug telemetry and organized for easier viewing.
-                        $msg = "    -> ID:$($cand.ID) | Trk:$($cand.ID+1) | Sel:$($cand.Sel) | Score: $($cand.Score) | Lang: $($cand.Lang) | Name: $($cand.Name) `n       Rules: [$($cand.Rules)]`n"
+                        $rulesDisp = $cand.Rules
+                        if ($rulesDisp.Length -gt 70 -and $rulesDisp.Contains(' | ')) {
+                            $splitIdx = $rulesDisp.IndexOf(' | ', [int]($rulesDisp.Length / 2))
+                            if ($splitIdx -eq -1) { $splitIdx = $rulesDisp.LastIndexOf(' | ') }
+                            if ($splitIdx -ne -1) { $rulesDisp = $rulesDisp.Insert($splitIdx + 3, "`n              ") }
+                        }
+                        $msg = "    -> ID:$($cand.ID) | Trk:$($cand.ID+1) | Sel:$($cand.Sel) | Score: $($cand.Score) | Lang: $($cand.Lang) | Name: $($cand.Name) `n       Rules: [$($rulesDisp)]`n"
                         Write-Host $msg -ForegroundColor Cyan
                         [void]$fixDetails.Add($msg)
                     }
