@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: MKVMetadataAuditor+Fixer.ps1
-# VERSION: 2026.06.14__18.38.00
+# VERSION: 2026.06.15__10.46.00
 # TARGET: PowerShell 7.6.2 LTS
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -137,7 +137,7 @@ if ($FixNoBackup) { $Fix = $true }
 if ($DeepSubtitleAuditDebugExtraction -or $DeepSubtitleAuditLanguageDetectionLimit2 -or $DeepSubtitleAuditNOLanguageDetection) { $DeepSubtitleAudit = $true }
 
 # --- GLOBAL VERSION DEFINITION ---
-$scriptVersion = "2026.06.14__18.38.00"
+$scriptVersion = "2026.06.15__10.46.00"
 
 # --- VERSION REPORTER ---
 if ($Version) {
@@ -553,7 +553,8 @@ function Detect-SubtitleLanguage {
     if ($DevDebug) {
         $pKor = [Math]::Round(($korCount / $total) * 100, 2); $pJpn = [Math]::Round(($jpnCount / $total) * 100, 2); $pChi = [Math]::Round(($chiCount / $total) * 100, 2)
         Write-Host "      -> Metrics: Chars Analyzed: $total" -ForegroundColor Gray
-        Write-Host "      -> Script Density: Korean: $pKor% | Japanese: $pJpn% | Chinese: $pChi%" -ForegroundColor Gray
+        # Write-Host "      -> Script Density: Korean: $pKor% | Japanese: $pJpn% | Chinese: $pChi%" -ForegroundColor Gray
+        Write-Host "      -> Script Density: Chinese: $pChi% | Japanese: $pJpn% | Korean: $pKor%" -ForegroundColor Gray
     }
 
     if ($korCount / $total -gt 0.15) { if ($DevDebug) { Write-Host "      -> MATCH: Korean (Hangul)" -ForegroundColor Green }; return "kor" }
@@ -573,14 +574,14 @@ function Detect-SubtitleLanguage {
         $honMatches = if ($Honorifics) { [regex]::Matches($text, "-(?:san|kun|chan|sama|dono|senpai|kohai|sensei|niisan|niichan|neesan|neechan|jiisan|jiichan|baasan|baachan|shisou|heika|denka|kakka|tan|chama)\b").Count } else { 0 }
 
         if ($DevDebug) {
-            Write-Host "      -> English Metrics: Stopwords: $engMatches (Target: 20+ with anchors, or 30+ total)" -ForegroundColor Gray
+            Write-Host "      -> English Metrics: Stopwords: $engMatches (Target: 20+ with anchors, or 28+ total)" -ForegroundColor Gray
             Write-Host "      -> English Anchors: 'The' Count: $theCount | Honorifics: $honMatches" -ForegroundColor Gray
         }
         
         # Confidence Model:
         # A: Base Lexicon (20+) + Structural Anchor (2+ "the" OR 1+ Honorific)
-        # B: High Volume Lexicon (30+) regardless of anchors (Safely handles short "the"-less scripts)
-        $isEnglish = ($engMatches -ge 30) -or ($engMatches -ge 20 -and ($theCount -ge 2 -or $honMatches -ge 1))
+        # B: High Volume Lexicon (28+) regardless of anchors (Safely handles short "the"-less scripts)
+        $isEnglish = ($engMatches -ge 28) -or ($engMatches -ge 20 -and ($theCount -ge 2 -or $honMatches -ge 1))
 
         if ($isEnglish) {
             if ($Honorifics -and $honMatches -ge 1) { 
@@ -1567,82 +1568,91 @@ if ($DevDebug) {
     Start-Transcript -Path $terminalLog -Append -Force | Out-Null
 }
 
-# --- THROTTLE LIMIT AUTO-TUNING ---
+# --- THROTTLE LIMIT AUTO-TUNING & PERSISTENT CACHE ---
 $script:OptimalThrottleLimit = 4 
 $script:ThrottleReason = "Default (Conservative)"
+$cacheFile = Join-Path $PSScriptRoot "MKVMetadataAuditor+Fixer.drive_cache.json"
 
-if ($DevDebug) { Write-Host "`n [DevDebug-Tuning] Probe Start..." -ForegroundColor DarkCyan }
-
-try {
-    if ($inputPaths.Count -gt 0) {
-        $path = $inputPaths[0]
-        if ($DevDebug) { Write-Host " [DevDebug-Tuning] Path: $path" -ForegroundColor Gray }
-
-        if ($path.StartsWith("\\")) {
-            $script:OptimalThrottleLimit = 3
-            $script:ThrottleReason = "Network (UNC Path)"
-        } else {
-            $root = [System.IO.Path]::GetPathRoot($path)
-            $drive = [System.IO.DriveInfo]::new($root)
-            if ($DevDebug) { Write-Host " [DevDebug-Tuning] Root: $root | Type: $($drive.DriveType)" -ForegroundColor Gray }
-
-            if ($drive.DriveType -eq "Network") {
-                $script:OptimalThrottleLimit = 3
-                $script:ThrottleReason = "Network (Mapped Drive)"
-            } elseif ($IsWindows) {
-                $id = $root.TrimEnd('\')
-                # Chain: LogicalDisk -> Partition -> DiskDrive
-                $p = Get-CimInstance -Query "Associators of {Win32_LogicalDisk.DeviceID='$id'} where AssocClass=Win32_LogicalDiskToPartition" -ErrorAction SilentlyContinue
-                $d = Get-CimInstance -Query "Associators of {Win32_DiskPartition.DeviceID='$($p.DeviceID)'} where AssocClass=Win32_DiskDriveToDiskPartition" -ErrorAction SilentlyContinue
-                
-                if ($null -ne $d.Index) {
-                    if ($DevDebug) { Write-Host " [DevDebug-Tuning] CIM Map: Part:$($p.DeviceID) | Index:$($d.Index)" -ForegroundColor Gray }
-                    $phys = Get-PhysicalDisk | Where-Object { "$($_.DeviceId)" -eq "$($d.Index)" } -ErrorAction SilentlyContinue
-                    
-                    if ($phys) {
-                        $bus = "$($phys.BusType)"
-                        $media = "$($phys.MediaType)"
-                        if ($DevDebug) { Write-Host " [DevDebug-Tuning] StorageAPI: $($phys.FriendlyName) | Bus:$bus | Media:$media | Spindle:$($phys.SpindleSpeed)" -ForegroundColor Gray }
-                        
-                        $isUSB = $bus -match "USB"
-                        $isExplicitSSD = $media -match "SSD"
-                        
-                        if ($isUSB) {
-                            # USB Skepticism: USB bridges often report Spindle:0 for mechanical HDDs.
-                            # We only allow full parallel on USB if the Media is explicitly "SSD".
-                            $isFast = $isExplicitSSD
-                            if ($DevDebug) { Write-Host " [DevDebug-Tuning] USB Device Logic: Explicit SSD Required -> Match: $isFast" -ForegroundColor Gray }
-                        } else {
-                            # Internal (SATA/NVMe): Trust SpindleSpeed and BusType
-                            $isFast = ($phys.SpindleSpeed -eq 0) -or $isExplicitSSD -or ($bus -match "NVMe|SSD")
-                        }
-
-                        if ($isFast) {
-                            $script:OptimalThrottleLimit = [Environment]::ProcessorCount
-                            $script:ThrottleReason = "Local SSD/NVMe (Full Parallel)"
-                        } else {
-                            $script:OptimalThrottleLimit = 2
-                            $script:ThrottleReason = "Local HDD (Reduced Parallel)"
-                        }
-                    } else {
-                        if ($DevDebug) { Write-Host " [DevDebug-Tuning] StorageAPI failed for index $($d.Index)" -ForegroundColor DarkYellow }
-                        $script:ThrottleReason = "Local Disk (Generic)"
-                    }
-                } else {
-                    if ($DevDebug) { Write-Host " [DevDebug-Tuning] CIM mapping failed for drive $id" -ForegroundColor DarkYellow }
-                    $script:ThrottleReason = "Local Disk (WMI Map Fail)"
-                }
-            }
-        }
-    }
-} catch {
-    if ($DevDebug) { Write-Host " [DevDebug-Tuning] ERROR: $($_.Exception.Message)" -ForegroundColor Red }
-}
-
-# Final User Override: Ensure -Sequential has the final word regardless of drive detection
 if ($Sequential) {
     $script:OptimalThrottleLimit = 1
     $script:ThrottleReason = "User Forced (Sequential)"
+} elseif ($inputPaths.Count -gt 0) {
+    if ($DevDebug) { Write-Host "`n [DevDebug-Tuning] Probe Start..." -ForegroundColor DarkCyan }
+    
+    $path = $inputPaths[0]
+    $root = if ($path.StartsWith("\\")) { $path.Split('\')[0..3] -join '\' } else { [System.IO.Path]::GetPathRoot($path) }
+    
+    # 1. Check Persistence Cache
+    $cache = @{}
+    $isCacheValid = $false
+    if (Test-Path $cacheFile) {
+        try {
+            $now = Get-Date
+            $today6AM = $now.Date.AddHours(6)
+            $last6AM = if ($now -lt $today6AM) { $today6AM.AddDays(-1) } else { $today6AM }
+            
+            if ((Get-Item $cacheFile).LastWriteTime -ge $last6AM) {
+                $cache = Get-Content $cacheFile | ConvertFrom-Json -AsHashtable
+                if ($cache.ContainsKey($root)) {
+                    $script:OptimalThrottleLimit = $cache[$root].Limit
+                    $script:ThrottleReason = $cache[$root].Reason + " (Cached)"
+                    $isCacheValid = $true
+                }
+            }
+        } catch {}
+    }
+
+    # 2. Hardware Probe (Only if not cached or sequential)
+    if (-not $isCacheValid) {
+        try {
+            if ($DevDebug) { Write-Host " [DevDebug-Tuning] Path: $path" -ForegroundColor Gray }
+            if ($path.StartsWith("\\")) {
+                $script:OptimalThrottleLimit = 3
+                $script:ThrottleReason = "Network (UNC Path)"
+            } else {
+                $drive = [System.IO.DriveInfo]::new($root)
+                if ($DevDebug) { Write-Host " [DevDebug-Tuning] Root: $root | Type: $($drive.DriveType)" -ForegroundColor Gray }
+
+                if ($drive.DriveType -eq "Network") {
+                    $script:OptimalThrottleLimit = 3
+                    $script:ThrottleReason = "Network (Mapped Drive)"
+                } elseif ($IsWindows) {
+                    $id = $root.TrimEnd('\')
+                    $p = Get-CimInstance -Query "Associators of {Win32_LogicalDisk.DeviceID='$id'} where AssocClass=Win32_LogicalDiskToPartition" -ErrorAction SilentlyContinue
+                    $d = Get-CimInstance -Query "Associators of {Win32_DiskPartition.DeviceID='$($p.DeviceID)'} where AssocClass=Win32_DiskDriveToDiskPartition" -ErrorAction SilentlyContinue
+                    
+                    if ($null -ne $d.Index) {
+                        if ($DevDebug) { Write-Host " [DevDebug-Tuning] CIM Map: Part:$($p.DeviceID) | Index:$($d.Index)" -ForegroundColor Gray }
+                        $phys = Get-PhysicalDisk | Where-Object { "$($_.DeviceId)" -eq "$($d.Index)" } -ErrorAction SilentlyContinue
+                        if ($phys) {
+                            $bus = "$($phys.BusType)"; $media = "$($phys.MediaType)"
+                            if ($DevDebug) { Write-Host " [DevDebug-Tuning] StorageAPI: $($phys.FriendlyName) | Bus:$bus | Media:$media | Spindle:$($phys.SpindleSpeed)" -ForegroundColor Gray }
+                            
+                            $isFast = ($phys.SpindleSpeed -eq 0) -or ($media -match "SSD") -or ($bus -match "NVMe|SSD")
+                            if ($bus -match "USB") { 
+                                $isFast = ($media -match "SSD") 
+                                if ($DevDebug) { Write-Host " [DevDebug-Tuning] USB Device Logic: Explicit SSD Required -> Match: $isFast" -ForegroundColor Gray }
+                            }
+
+                            if ($isFast) { $script:OptimalThrottleLimit = [Environment]::ProcessorCount; $script:ThrottleReason = "Local SSD/NVMe (Full Parallel)" }
+                            else { $script:OptimalThrottleLimit = 2; $script:ThrottleReason = "Local HDD (Reduced Parallel)" }
+                        } else { 
+                            if ($DevDebug) { Write-Host " [DevDebug-Tuning] StorageAPI failed for index $($d.Index)" -ForegroundColor DarkYellow }
+                            $script:ThrottleReason = "Local Disk (Generic)" 
+                        }
+                    } else { 
+                        if ($DevDebug) { Write-Host " [DevDebug-Tuning] CIM mapping failed for drive $id" -ForegroundColor DarkYellow }
+                        $script:ThrottleReason = "Local Disk (WMI Map Fail)" 
+                    }
+                }
+            }
+            # Update Cache
+            $cache[$root] = @{ Limit = $script:OptimalThrottleLimit; Reason = $script:ThrottleReason }
+            $cache | ConvertTo-Json | Out-File $cacheFile -Encoding utf8
+        } catch {
+            if ($DevDebug) { Write-Host " [DevDebug-Tuning] ERROR: $($_.Exception.Message)" -ForegroundColor Red }
+        }
+    }
 }
 
 if ($DevDebug) { Write-Host " [DevDebug-Tuning] Final Selection: $script:OptimalThrottleLimit Threads | Reason: $script:ThrottleReason`n" -ForegroundColor DarkCyan }
@@ -1654,7 +1664,7 @@ $script:GlobalTemp = Join-Path $env:TEMP "MKVMetadataAuditor+Fixer"
 if (Test-Path $script:GlobalTemp) { 
     Remove-Item -LiteralPath $script:GlobalTemp -Recurse -Force -ErrorAction SilentlyContinue 
 }
-New-Item -Path $script:GlobalTemp -ItemType Directory | Out-Null
+New-Item -Path $script:GlobalTemp -ItemType Directory -Force | Out-Null
 
 $noHwList = New-Object System.Collections.Generic.List[string]
 $sessionFlags = New-Object System.Collections.Generic.HashSet[string]
@@ -2770,6 +2780,10 @@ foreach ($folderPath in $targetFolders) {
                                         Write-Host "  [DevDebug-DSA] Bitstream/Text Probe SUCCESS (Ratio: $($bRatio.ToString('F2')))" -ForegroundColor Green
                                     }
                                     $isResolved = $true
+                                } else {
+                                    if ($devDebugActive) {
+                                        Write-Host "  [DevDebug-DSA] Ratio too low ($($bRatio.ToString('F2'))). Skipping Naming logic." -ForegroundColor DarkGray
+                                    }
                                 }
                             }
 
@@ -3079,7 +3093,7 @@ foreach ($folderPath in $targetFolders) {
                                                         # [FIX] Authorize Stage 3 naming logic for header-resolved files
                                                         $currentGroup | Add-Member -MemberType NoteProperty -Name ($fileGuid + "_Ratio") -Value $targetRatio -Force
                                                     } else {
-                                                        if ($DevDebug) { Write-Host "  [DevDebug-DSA] Header Probe Skip: Ratio too low ($($hRatio.ToString('F2')))." -ForegroundColor DarkYellow }
+                                                        if ($DevDebug) { Write-Host "  [DevDebug-DSA] Ratio too low ($($hRatio.ToString('F2'))). Skipping Naming logic." -ForegroundColor DarkGray }
                                                     }
                                                 } else {
                                                     if ($DevDebug) { Write-Host "  [DevDebug-DSA] Header Probe Skip: Tracks not tagged as Dual-English." -ForegroundColor DarkYellow }
@@ -3208,6 +3222,17 @@ foreach ($folderPath in $targetFolders) {
                                             $needsChange = $true
                                             if ($Fix) { $Params += @('--edit', "track:$($tH.id + 1)", '--set', "language=eng") }
                                             $tH.properties.language = "eng"
+                                        }
+
+                                        # 1b. Role Validation: Check if name already contains correct keywords
+                                        $isCorrect = if ($tH.DSA_DetectedLang -eq "enm") { $curName -match "Honorifics" -and $curName -match "Full Dialogue" }
+                                                     elseif ($tH.DSA_DetectedLang -eq "eng") { $curName -match "Full Dialogue" -and $curName -notmatch "Honorifics" }
+                                                     else { $curName -match "Honorifics" -and $curName -match "Full Dialogue" }
+
+                                        if ($isCorrect) {
+                                            if ($DevDebug) { Write-Host "    [DevDebug-DSA] VERIFIED: Track $($tH.id + 1) already contains correct honorifics role keywords. Skipping rename." -ForegroundColor Green }
+                                            $tH.properties | Add-Member -NotePropertyName "DSA_Handled" -NotePropertyValue $true -Force
+                                            continue 
                                         }
 
                                         # 2. Truth-Based Naming: If bitstream proved standard English, demote 'Honorifics' liar.
@@ -3465,11 +3490,11 @@ foreach ($folderPath in $targetFolders) {
                 if ($DevDebug -and $subCandidates.Count -gt 0) {
                     Write-Host "" # Gap between DSA and Fixer
                     Write-Host "  [DevDebug-Fixer] Scoring file at path: $($fToFix.FullName)" -ForegroundColor Gray
-                    Write-Host "  [DevDebug-Fixer] Subtitle Scoring Candidates:" -ForegroundColor Cyan
+                    Write-Host "  [DevDebug-Fixer] Subtitle Scoring Candidates:`n" -ForegroundColor Cyan
                     [void]$fixDetails.Add("  [DevDebug-Fixer] Subtitle Scoring Breakdown:")
                     foreach ($cand in ($subCandidates | Sort-Object Score -Descending)) {
-                        # [CHANGE] v2026.05.29__15.58.42 - Include Sel in scoring debug telemetry
-                        $msg = "    -> ID:$($cand.ID) | Sel:$($cand.Sel) | Score: $($cand.Score) | Lang: $($cand.Lang) | Rules: [$($cand.Rules)] | Name: $($cand.Name)"
+                        # [CHANGE] v2026.06.15__09.22.41 - Include Track in scoring debug telemetry and organized for easier viewing.
+                        $msg = "    -> ID:$($cand.ID) | Trk:$($cand.ID+1) | Sel:$($cand.Sel) | Score: $($cand.Score) | Lang: $($cand.Lang) | Name: $($cand.Name) `n       Rules: [$($cand.Rules)]`n"
                         Write-Host $msg -ForegroundColor Cyan
                         [void]$fixDetails.Add($msg)
                     }
