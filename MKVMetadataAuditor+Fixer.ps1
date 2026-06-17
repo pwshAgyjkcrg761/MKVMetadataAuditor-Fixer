@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: MKVMetadataAuditor+Fixer.ps1
-# VERSION: 2026.06.16__16.42.00
+# VERSION: 2026.06.17__09.03.00
 # TARGET: PowerShell 7.6.2 LTS
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -137,7 +137,7 @@ if ($FixNoBackup) { $Fix = $true }
 if ($DeepSubtitleAuditDebugExtraction -or $DeepSubtitleAuditLanguageDetectionLimit2 -or $DeepSubtitleAuditNOLanguageDetection) { $DeepSubtitleAudit = $true }
 
 # --- GLOBAL VERSION DEFINITION ---
-$scriptVersion = "2026.06.16__16.42.00"
+$scriptVersion = "2026.06.17__09.03.00"
 
 # --- VERSION REPORTER ---
 if ($Version) {
@@ -568,7 +568,7 @@ function Detect-SubtitleLanguage {
         if ($DevDebug) { Write-Host "      -> Latin Script Density: $([Math]::Round(($latin / $total) * 100, 2))%" -ForegroundColor Gray }
         
         # English Verification Logic (Hardened Stopwords)
-        $engStopwords = "\b(the|you|with|this|they|have|from|your|that|what|will|would|should|could|there|their)\b"
+        $engStopwords = "\b(the|you|with|this|they|have|from|your|that|what|will|would|should|could|there|their|and|but|or|which|because|these|those|been|had|has|were|was|who|whom|does|did|a|an)\b"
         $engMatches = [regex]::Matches($text, $engStopwords).Count
         $theCount = [regex]::Matches($text, "\bthe\b").Count
         $honMatches = if ($Honorifics) { [regex]::Matches($text, "-(?:san|kun|chan|sama|dono|senpai|kohai|sensei|niisan|niichan|neesan|neechan|jiisan|jiichan|baasan|baachan|shisou|heika|denka|kakka|tan|chama)\b").Count } else { 0 }
@@ -2775,9 +2775,42 @@ foreach ($folderPath in $targetFolders) {
                                         $weights[$sub.id] = (Get-Item -LiteralPath $probeFile).Length
                                     }
                                 }
-                            }
+                        }
 
-                            # Compute and validate final sizing ratio
+                        if ($devDebugActive) {
+                            # Log Resolution SUCCESS (if applicable) for the log stream
+                            $pairs = $allSubs | Group-Object { 
+                                $isText = $_.codec -match "s_text|utf8|srt|ass|ssa|substationalpha|subrip"
+                                $family = if ($isText) { "TEXT" } else { $_.codec }
+                                $effL = if ($detectedLangs.ContainsKey($_.id) -and $detectedLangs[$_.id] -ne "und") { $detectedLangs[$_.id] } else { $_.properties.language }
+                                "$family|$effL"
+                            }
+                            foreach ($grp in $pairs) {
+                                if ($grp.Count -eq 2) {
+                                    $w1 = $weights[$grp.Group[0].id]; $w2 = $weights[$grp.Group[1].id]
+                                    if ($w1 -gt 0 -or $w2 -gt 0) {
+                                        $ratio = [Math]::Max($w1, $w2) / [Math]::Max(1, [Math]::Min($w1, $w2))
+                                        $minReq = if ($grp.Group[0].codec -match "s_text|utf8|srt|ass|ssa|substationalpha|subrip") { 2.0 } else { 3.0 }
+                                        if ($ratio -ge $minReq) { Write-Host "[DevDebug-DSA] Bitstream/Text Probe SUCCESS (Ratio: $($ratio.ToString('F2')))" -ForegroundColor Green }
+                                    }
+                                } elseif ($grp.Count -gt 2) {
+                                    Write-Host "[DevDebug-DSA] Bitstream/Text Probe SUCCESS (Multi-Track Outlier Detection)" -ForegroundColor Green
+                                }
+                            }
+                            foreach ($sub in $allSubs) {
+                                if ($weights.ContainsKey($sub.id)) {
+                                    $sIdx = [array]::IndexOf($allSubs, $sub) + 1
+                                    $kb = [Math]::Round($weights[$sub.id] / 1024, 3)
+                                    Write-Host "    [DevDebug-DSA] Final Weight ID:$($sub.id) - Track $($sub.id + 1) - [s$sIdx]...($kb KB)" -ForegroundColor Gray
+                                }
+                            }
+                            Write-Host "    [DevDebug-DSA] Preservation Active: Files kept at -> $tempDir" -ForegroundColor DarkCyan
+                            foreach ($sub in $allSubs) {
+                                Write-Host "  [DevDebug-DSA] Found Track:$($sub.id + 1) Name: $($sub.properties.track_name)" -ForegroundColor Gray
+                            }
+                        }
+
+                        # Compute and validate final sizing ratio
                             # Subgroup Resolution Logic: Check for any pairs that meet the threshold
                             $pairs = $allSubs | Group-Object { 
                                 $isText = $_.codec -match "s_text|utf8|srt|ass|ssa|substationalpha|subrip"
@@ -3220,6 +3253,25 @@ foreach ($folderPath in $targetFolders) {
 
                                             # Cleanup artifacts
                                             if ($DevDebug) {
+                                                # Calculate and print SUCCESS line first
+                                                $pairs = $ambiguousTracks | Group-Object { 
+                                                    $isText = $_.codec -match "s_text|utf8|srt|ass|ssa|substationalpha|subrip"
+                                                    $family = if ($isText) { "TEXT" } else { $_.codec }
+                                                    $effL = if ($_.DSA_DetectedLang -and $_.DSA_DetectedLang -ne "und") { $_.DSA_DetectedLang } else { $_.properties.language }
+                                                    "$family|$effL"
+                                                }
+                                                foreach ($grp in $pairs) {
+                                                    if ($grp.Count -eq 2) {
+                                                        $w1 = $dsaCtx.Weights[$grp.Group[0].id]; $w2 = $dsaCtx.Weights[$grp.Group[1].id]
+                                                        if ($w1 -gt 0 -or $w2 -gt 0) {
+                                                            $ratio = [Math]::Max($w1, $w2) / [Math]::Max(1, [Math]::Min($w1, $w2))
+                                                            $minReq = if ($grp.Group[0].codec -match "s_text|utf8|srt|ass|ssa|substationalpha|subrip") { 2.0 } else { 3.0 }
+                                                            if ($ratio -ge $minReq) { Write-Host "[DevDebug-DSA] Bitstream/Text Probe SUCCESS (Ratio: $($ratio.ToString('F2')))" -ForegroundColor Green }
+                                                        }
+                                                    } elseif ($grp.Count -gt 2) {
+                                                        Write-Host "[DevDebug-DSA] Bitstream/Text Probe SUCCESS (Multi-Track Outlier Detection)" -ForegroundColor Green
+                                                    }
+                                                }
                                                 $allSubs = @($fToFix.PristineJson.tracks | Where-Object { $_.type -eq "subtitles" })
                                                 foreach ($sub in $ambiguousTracks) {
                                                     $sIdx = [array]::IndexOf($allSubs, $sub) + 1
@@ -3228,6 +3280,9 @@ foreach ($folderPath in $targetFolders) {
                                                     Write-Host "    [DevDebug-DSA] Final Weight ID:$($sub.id) - Track $($sub.id + 1) - [$sSel]...($kb KB)" -ForegroundColor Gray
                                                 }
                                                 Write-Host "    [DevDebug-DSA] Preservation Active: Files kept at -> $tempDir" -ForegroundColor DarkCyan
+                                                foreach ($sub in $ambiguousTracks) {
+                                                    Write-Host "  [DevDebug-DSA] Found Track:$($sub.id + 1) Name: $($sub.properties.track_name)" -ForegroundColor Gray
+                                                }
                                             } else {
                                                 if (Test-Path $tempDir) { Remove-Item $tempDir -Recurse -Force -ErrorAction SilentlyContinue }
                                             }
