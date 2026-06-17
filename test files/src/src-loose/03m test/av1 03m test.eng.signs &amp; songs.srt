@@ -1,0 +1,49 @@
+1
+00:00:01,000 --> 00:00:05,500
+♪ 'Twas brillig, and the slithy toves ♪
+♪ Did gyre and gimble in the wabe; ♪
+
+2
+00:00:06,000 --> 00:00:10,200
+♪ All mimsy were the borogoves, ♪
+♪ And the mome raths outgrabe. ♪
+
+3
+00:00:11,100 --> 00:00:15,800
+♪ Beware the Jabberwock, my son! ♪
+♪ The jaws that bite, the claws that catch! ♪
+
+4
+00:00:16,300 --> 00:00:21,000
+♪ Beware the Jubjub bird, and shun ♪
+♪ The frumious Bandersnatch! ♪
+
+5
+00:00:22,200 --> 00:00:26,500
+♪ He took his vorpal sword in hand: ♪
+♪ Long time the manxome foe he sought— ♪
+
+6
+00:00:27,000 --> 00:00:31,000
+♪ So rested he by the Tumtum tree, ♪
+♪ And stood awhile in thought. ♪
+
+7
+00:00:31,800 --> 00:00:36,400
+♪ And as in uffish thought he stood, ♪
+♪ The Jabberwock, with eyes of flame, ♪
+
+8
+00:00:37,000 --> 00:00:41,500
+♪ Came whiffling through the tulgey wood, ♪
+♪ And burbled as it came! ♪
+
+9
+00:00:42,200 --> 00:00:46,000
+♪ One, two! One, two! And through and through ♪
+♪ The vorpal blade went snicker-snack! ♪
+
+10
+00:00:46,500 --> 00:01:50,800
+♪ He left it dead, and with its head ♪
+♪ He went galumphing back. ♪
