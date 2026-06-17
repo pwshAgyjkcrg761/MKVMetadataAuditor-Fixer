@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: MKVMetadataAuditor+Fixer.ps1
-# VERSION: 2026.06.17__11.35.00
+# VERSION: 2026.06.17__14.42.01
 # TARGET: PowerShell 7.6.2 LTS
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -137,7 +137,7 @@ if ($FixNoBackup) { $Fix = $true }
 if ($DeepSubtitleAuditDebugExtraction -or $DeepSubtitleAuditLanguageDetectionLimit2 -or $DeepSubtitleAuditNOLanguageDetection) { $DeepSubtitleAudit = $true }
 
 # --- GLOBAL VERSION DEFINITION ---
-$scriptVersion = "2026.06.17__11.35.00"
+$scriptVersion = "2026.06.17__14.42.01"
 
 # --- VERSION REPORTER ---
 if ($Version) {
@@ -1789,7 +1789,7 @@ $script:RegexSign = "Sign|Song|Lyric|Opening|Ending|\bOP\b|\bED\b|Partial|Forced
 
 # [2026.06.13] Centralized Honorifics & Sanitizer
 $script:RegexHon = "(?<!\b(?:no|non|without|removed)[-\s(]*)(?:honorific|honor)"
-$script:RegexSanitizer = "(?i)\b(full|dialogue|dialog|honorifics?|honor|signs|songs|english|eng|subs|subtitles|main|lyrics|translated|translation|with|without)\b"
+$script:RegexSanitizer = "(?i)\b(full|dialogue|dialog|honorifics?|honor|signs?|songs?|english|eng|subs|subtitles|main|lyrics|translated|translation|with|without|dubtitles?|for\s+dub)\b"
 
 # 2. APPLY OVERRIDES FROM COMMAND LINE
 # Ensure the Video object exists in the defaults
@@ -3317,7 +3317,7 @@ foreach ($folderPath in $targetFolders) {
                                 
                                 # Aggressive Role Sanitization Filter
                                 $roleFilter = $script:RegexSanitizer
-                                $SanitizeName = { param($n) ($n -replace $roleFilter, ' ' -replace '[\(\)\[\]\{\}\-\.\:\&\+]', ' ').Trim() -replace '\s+', ' ' }
+                                $SanitizeName = { param($n) ($n -replace $roleFilter, ' ' -replace '[\(\)\[\]\{\}\-\.\:\&\+\/]', ' ').Trim() -replace '\s+', ' ' }
 
                                 # Phase A: Universal Honorifics & Language Normalization (ALL tracks)
                                 foreach ($tH in $ambiguousTracks) {
@@ -3325,12 +3325,17 @@ foreach ($folderPath in $targetFolders) {
                                     if ($isHonDet) {
                                         $curName = if ($tH.properties.track_name) { $tH.properties.track_name } else { "" }
                                         
+                                        # [FIX] Do not force "Full Dialogue" role on tracks already labeled as Signs & Songs
+                                        $isSignsTrack = ($curName -match $script:RegexSign)
+
                                         # 1. Language Normalization: Force header to 'eng'
                                         if ($tH.properties.language -ne "eng") {
                                             $needsChange = $true
                                             if ($Fix) { $Params += @('--edit', "track:$($tH.id + 1)", '--set', "language=eng") }
                                             $tH.properties.language = "eng"
                                         }
+
+                                        if ($isSignsTrack) { continue }
 
                                         # 1b. Role Validation: Check if name already contains correct keywords
                                         $isCorrect = if ($tH.DSA_DetectedLang -eq "enm") { $curName -match "Honorifics" -and $curName -match "Full Dialogue" }
