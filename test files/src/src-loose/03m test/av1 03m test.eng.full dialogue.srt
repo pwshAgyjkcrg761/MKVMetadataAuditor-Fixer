@@ -1,0 +1,113 @@
+1
+00:00:01,500 --> 00:00:11,800
+♪ 'Twas brillig, and the slithy toves ♪
+♪ Did gyre and gimble in the wabe; ♪
+
+2
+00:00:12,300 --> 00:00:23,100
+♪ All mimsy were the borogoves, ♪
+♪ And the mome raths outgrabe. ♪
+
+3
+00:00:23,600 --> 00:00:34,200
+♪ "Beware the Jabberwock, my son! ♪
+♪ The jaws that bite, the claws that catch! ♪
+
+4
+00:00:34,900 --> 00:00:45,400
+♪ Beware the Jubjub bird, and shun ♪
+♪ The frumious Bandersnatch!" ♪
+
+5
+00:00:45,900 --> 00:00:56,500
+♪ He took his vorpal sword in hand: ♪
+♪ Long time the manxome foe he sought— ♪
+
+6
+00:00:57,100 --> 00:01:07,900
+♪ So rested he by the Tumtum tree, ♪
+♪ And stood awhile in thought. ♪
+
+7
+00:01:08,400 --> 00:01:19,000
+♪ And as in uffish thought he stood, ♪
+♪ The Jabberwock, with eyes of flame, ♪
+
+8
+00:01:19,600 --> 00:01:30,200
+♪ Came whiffling through the tulgey wood, ♪
+♪ And burbled as it came! ♪
+
+9
+00:01:30,900 --> 00:01:41,500
+♪ One, two! One, two! And through and through ♪
+♪ The vorpal blade went snicker-snack! ♪
+
+10
+00:01:42,100 --> 00:01:58,500
+♪ He left it dead, and with its head ♪
+♪ He went galumphing back. ♪
+
+11
+00:02:01,200 --> 00:02:03,900
+(Alice) A mad tea-party...
+
+12
+00:02:04,500 --> 00:02:08,200
+There was a table set out under a tree in front of the house.
+
+13
+00:02:08,800 --> 00:02:12,400
+The March Hare and the Hatter were having tea at it.
+
+14
+00:02:13,000 --> 00:02:16,700
+A Dormouse was sitting between them, fast asleep.
+
+15
+00:02:17,200 --> 00:02:21,500
+The other two were using it as a cushion, resting their elbows on it.
+
+16
+00:02:22,100 --> 00:02:25,900
+They were talking right over its head.
+
+17
+00:02:26,400 --> 00:02:28,800
+*Very uncomfortable for the Dormouse...*
+
+18
+00:02:29,300 --> 00:02:32,900
+Only, as it's asleep, I suppose it doesn't mind.
+
+19
+00:02:33,400 --> 00:02:36,800
+The table was a large one, but the three were all crowded together at one corner of it.
+
+20
+00:02:37,300 --> 00:02:39,500
+No room! No room!
+
+21
+00:02:40,100 --> 00:02:42,500
+There's plenty of room!
+
+22
+00:02:43,100 --> 00:02:46,400
+She sat down in a large arm-chair at one end of the table.
+
+23
+00:02:46,900 --> 00:02:48,900
+Have some wine.
+
+24
+00:02:49,500 --> 00:02:51,900
+I don't see any wine.
+
+25
+00:02:52,400 --> 00:02:54,200
+There isn't any.
+
+26
+00:02:54,800 --> 00:02:57,900
+Then it wasn't very civil of you to offer it.
