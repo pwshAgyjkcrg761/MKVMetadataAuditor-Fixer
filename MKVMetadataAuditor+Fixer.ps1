@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: MKVMetadataAuditor+Fixer.ps1
-# VERSION: 2026.06.17__09.03.00
+# VERSION: 2026.06.17__11.35.00
 # TARGET: PowerShell 7.6.2 LTS
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -137,7 +137,7 @@ if ($FixNoBackup) { $Fix = $true }
 if ($DeepSubtitleAuditDebugExtraction -or $DeepSubtitleAuditLanguageDetectionLimit2 -or $DeepSubtitleAuditNOLanguageDetection) { $DeepSubtitleAudit = $true }
 
 # --- GLOBAL VERSION DEFINITION ---
-$scriptVersion = "2026.06.17__09.03.00"
+$scriptVersion = "2026.06.17__11.35.00"
 
 # --- VERSION REPORTER ---
 if ($Version) {
@@ -568,7 +568,7 @@ function Detect-SubtitleLanguage {
         if ($DevDebug) { Write-Host "      -> Latin Script Density: $([Math]::Round(($latin / $total) * 100, 2))%" -ForegroundColor Gray }
         
         # English Verification Logic (Hardened Stopwords)
-        $engStopwords = "\b(the|you|with|this|they|have|from|your|that|what|will|would|should|could|there|their|and|but|or|which|because|these|those|been|had|has|were|was|who|whom|does|did|a|an)\b"
+        $engStopwords = "\b(the|you|with|this|they|have|from|your|that|what|will|would|should|could|there|their|through|and|but|or|which|because|these|those|been|had|has|were|was|who|whom|does|did|a|an)\b"
         $engMatches = [regex]::Matches($text, $engStopwords).Count
         $theCount = [regex]::Matches($text, "\bthe\b").Count
         $honMatches = if ($Honorifics) { [regex]::Matches($text, "-(?:san|kun|chan|sama|dono|senpai|kohai|sensei|niisan|niichan|neesan|neechan|jiisan|jiichan|baasan|baachan|shisou|heika|denka|kakka|tan|chama)\b").Count } else { 0 }
@@ -2792,6 +2792,7 @@ foreach ($folderPath in $targetFolders) {
                                         $ratio = [Math]::Max($w1, $w2) / [Math]::Max(1, [Math]::Min($w1, $w2))
                                         $minReq = if ($grp.Group[0].codec -match "s_text|utf8|srt|ass|ssa|substationalpha|subrip") { 2.0 } else { 3.0 }
                                         if ($ratio -ge $minReq) { Write-Host "[DevDebug-DSA] Bitstream/Text Probe SUCCESS (Ratio: $($ratio.ToString('F2')))" -ForegroundColor Green }
+                                        else { Write-Host "    [DevDebug-DSA] Ratio too low for subgroup resolution ($($ratio.ToString('F2')) < $minReq)" -ForegroundColor DarkGray }
                                     }
                                 } elseif ($grp.Count -gt 2) {
                                     Write-Host "[DevDebug-DSA] Bitstream/Text Probe SUCCESS (Multi-Track Outlier Detection)" -ForegroundColor Green
@@ -3267,6 +3268,7 @@ foreach ($folderPath in $targetFolders) {
                                                             $ratio = [Math]::Max($w1, $w2) / [Math]::Max(1, [Math]::Min($w1, $w2))
                                                             $minReq = if ($grp.Group[0].codec -match "s_text|utf8|srt|ass|ssa|substationalpha|subrip") { 2.0 } else { 3.0 }
                                                             if ($ratio -ge $minReq) { Write-Host "[DevDebug-DSA] Bitstream/Text Probe SUCCESS (Ratio: $($ratio.ToString('F2')))" -ForegroundColor Green }
+                                                            else { Write-Host "    [DevDebug-DSA] Ratio too low for subgroup resolution ($($ratio.ToString('F2')) < $minReq)" -ForegroundColor DarkGray }
                                                         }
                                                     } elseif ($grp.Count -gt 2) {
                                                         Write-Host "[DevDebug-DSA] Bitstream/Text Probe SUCCESS (Multi-Track Outlier Detection)" -ForegroundColor Green
