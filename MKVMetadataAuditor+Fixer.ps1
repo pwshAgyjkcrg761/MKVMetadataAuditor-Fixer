@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: MKVMetadataAuditor+Fixer.ps1
-# VERSION: 2026.06.17__21.38.00
+# VERSION: 2026.06.18__16.32.01
 # TARGET: PowerShell 7.6.2 LTS
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -137,7 +137,7 @@ if ($FixNoBackup) { $Fix = $true }
 if ($DeepSubtitleAuditDebugExtraction -or $DeepSubtitleAuditLanguageDetectionLimit2 -or $DeepSubtitleAuditNOLanguageDetection) { $DeepSubtitleAudit = $true }
 
 # --- GLOBAL VERSION DEFINITION ---
-$scriptVersion = "2026.06.17__21.38.00"
+$scriptVersion = "2026.06.18__16.32.01"
 
 # --- VERSION REPORTER ---
 if ($Version) {
@@ -573,18 +573,19 @@ function Detect-SubtitleLanguage {
         $theCount = [regex]::Matches($text, "\bthe\b").Count
         $honMatches = if ($Honorifics) { [regex]::Matches($text, "-(?:san|kun|chan|sama|dono|senpai|kohai|sensei|niisan|niichan|neesan|neechan|jiisan|jiichan|baasan|baachan|shisou|heika|denka|kakka|tan|chama)\b").Count } else { 0 }
 
+        $engDensity = $engMatches / $total
         if ($DevDebug) {
-            Write-Host "      -> English Metrics: Stopwords: $engMatches (Target: 30+ with anchors, or 100+ total)" -ForegroundColor Gray
-            Write-Host "      -> English Anchors: 'The' Count: $theCount (Req: 8+) | Honorifics: $honMatches" -ForegroundColor Gray
+            Write-Host "      -> English Metrics: Stopwords: $engMatches (Density: $([Math]::Round($engDensity * 100, 2))% - Req: 0.75% for Latin)" -ForegroundColor Gray
+            Write-Host "      -> English Anchors: 'The' Count: $theCount (Req: 8+) | Honorifics: $honMatches (Req: 3 for enm)" -ForegroundColor Gray
         }
         
         # Confidence Model:
-        # A: Base Lexicon (30+) + Structural Anchor (8+ "the" OR 1+ Honorific)
-        # B: High Volume Lexicon (100+) regardless of anchors (Harden against Romance language overlap)
-        $isEnglish = ($engMatches -ge 100) -or ($engMatches -ge 30 -and ($theCount -ge 8 -or $honMatches -ge 1))
+        # A: High Volume Lexicon (100+) + Density Floor (0.75%)
+        # B: Base Lexicon (30+) + English Anchor ("the" x8) + Density Floor (0.75%) + Structural Anchor (8+ "the" OR 3+ Honorifics)
+        $isEnglish = ($engMatches -ge 100 -and $engDensity -ge 0.0075) -or ($engMatches -ge 30 -and $engDensity -ge 0.0075 -and $theCount -ge 8 -or ($theCount -ge 3 -and $honMatches -ge 3))
 
         if ($isEnglish) {
-            if ($Honorifics -and $honMatches -ge 1) { 
+            if ($Honorifics -and $honMatches -ge 3) { 
                 if ($DevDebug) { Write-Host "      -> MATCH: English (Japanese Honorifics) [enm] (Header: eng)" -ForegroundColor Green }
                 return "enm:${honMatches}:${theCount}" 
             }
@@ -878,6 +879,10 @@ function Get-TrackScore {
     if ($trackName -match $RegexSign) { 
         $score -= 200 
         [void]$ruleLog.Add("SignsSongs(-200)")
+    }
+    if ($trackName -match $script:RegexDub) { 
+        $score -= 100 
+        [void]$ruleLog.Add("Dubtitle(-100)")
     } 
 
     # 4. Honorifics Scoring
@@ -1786,7 +1791,8 @@ $codecMap = @{
 $script:RegexDiag = "Dialog|Full|Japanese Audio|Main"
 # Streamlined Sign logic: Opening/Ending/OP/ED added.
 # Added word boundaries (\b) to OP and ED to prevent matching strings like "Modified" or "Styled".
-$script:RegexSign = "Sign|Song|Lyric|Opening|Ending|\bOP\b|\bED\b|Partial|Forced|Translation|ASSR|S&S|S\s&\sS|Dubtitle"
+$script:RegexSign = "Sign|Song|Lyric|Opening|Ending|\bOP\b|\bED\b|Partial|Forced|Translation|ASSR|S&S|S\s&\sS"
+$script:RegexDub  = "(?i)dubtitles?"
 
 # [2026.06.13] Centralized Honorifics & Sanitizer
 $script:RegexHon = "(?<!\b(?:no|non|without|removed)[-\s(]*)(?:honorific|honor)"
@@ -3322,7 +3328,15 @@ foreach ($folderPath in $targetFolders) {
 
                                 # Phase A: Universal Honorifics & Language Normalization (ALL tracks)
                                 foreach ($tH in $ambiguousTracks) {
-                                    $isHonDet = ($tH.DSA_DetectedLang -eq "enm" -or $tH.properties.language -eq "enm" -or $tH.properties.track_name -match $script:RegexHon)
+                                    $curName = if ($tH.properties.track_name) { $tH.properties.track_name } else { "" }
+
+                                    # [FIX] Hard Bypass: Never rename tracks explicitly tagged as Dubtitles
+                                    if ($curName -match $script:RegexDub) {
+                                        $tH.properties | Add-Member -NotePropertyName "DSA_Handled" -NotePropertyValue $true -Force
+                                        continue
+                                    }
+
+                                    $isHonDet = ($tH.DSA_DetectedLang -eq "enm" -or $tH.properties.language -eq "enm" -or $curName -match $script:RegexHon)
                                     if ($isHonDet) {
                                         $curName = if ($tH.properties.track_name) { $tH.properties.track_name } else { "" }
                                         
@@ -3453,6 +3467,12 @@ foreach ($folderPath in $targetFolders) {
                                                 
                                                 if ($ratio -ge $minReq -and $isDualEng) {
                                                     $actionMsg = ""
+                                                    # [FIX] Pairing Bypass: Skip renaming if either track is a Dubtitle
+                                                    if ($nameL -match $script:RegexDub -or $nameS -match $script:RegexDub) {
+                                                        $largeTrack.properties | Add-Member -NotePropertyName "DSA_Handled" -NotePropertyValue $true -Force
+                                                        $smallTrack.properties | Add-Member -NotePropertyName "DSA_Handled" -NotePropertyValue $true -Force
+                                                        continue
+                                                    }
                                                     $handledL = $largeTrack.properties.DSA_Handled
                                                     $handledS = $smallTrack.properties.DSA_Handled
 
@@ -3537,6 +3557,11 @@ foreach ($folderPath in $targetFolders) {
                                             $threshold = 0.45
 
                                             if ($minWeight -gt 0 -and $maxWeight -gt 0 -and ($minWeight / $maxWeight -lt $threshold)) {
+                                                # [FIX] Outlier Pre-Check: Protect Dubtitles from being considered for rename
+                                                foreach ($item in $grpWeights) {
+                                                    $tO = $item.T; $curName = if ($tO.properties.track_name) { $tO.properties.track_name } else { "" }
+                                                    if ($curName -match $script:RegexDub) { $tO.properties | Add-Member -NotePropertyName "DSA_Handled" -NotePropertyValue $true -Force }
+                                                }
                                                 $grpName = if ($isTextGrp) { "TEXT" } else { $grpWeights[0].T.codec }
                                                 
                                                 # Identify Large Candidates (Tracks above threshold)
@@ -3547,7 +3572,8 @@ foreach ($folderPath in $targetFolders) {
                                                 $commentaryInGroup = ($grpWeights | Where-Object { $_.T.properties.track_name -match "Commentary|Interview" }).Count -gt 0
 
                                                 foreach ($item in $grpWeights) {
-                                                    $tO = $item.T; $curName = if ($tO.properties.track_name) { $tO.properties.track_name } else { "" }
+                                                    $tO = $item.T; 
+                                                    if ($tO.properties.DSA_Handled) { continue }
                                                     $effL = if ($tO.DSA_DetectedLang) { $tO.DSA_DetectedLang } else { $tO.properties.language }
                                                     $isSmallSize = ($item.W / $maxWeight -lt $threshold)
                                                     
