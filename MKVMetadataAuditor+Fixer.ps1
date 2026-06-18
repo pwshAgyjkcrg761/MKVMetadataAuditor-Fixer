@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: MKVMetadataAuditor+Fixer.ps1
-# VERSION: 2026.06.17__14.42.01
+# VERSION: 2026.06.17__21.38.00
 # TARGET: PowerShell 7.6.2 LTS
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -137,7 +137,7 @@ if ($FixNoBackup) { $Fix = $true }
 if ($DeepSubtitleAuditDebugExtraction -or $DeepSubtitleAuditLanguageDetectionLimit2 -or $DeepSubtitleAuditNOLanguageDetection) { $DeepSubtitleAudit = $true }
 
 # --- GLOBAL VERSION DEFINITION ---
-$scriptVersion = "2026.06.17__14.42.01"
+$scriptVersion = "2026.06.17__21.38.00"
 
 # --- VERSION REPORTER ---
 if ($Version) {
@@ -574,14 +574,14 @@ function Detect-SubtitleLanguage {
         $honMatches = if ($Honorifics) { [regex]::Matches($text, "-(?:san|kun|chan|sama|dono|senpai|kohai|sensei|niisan|niichan|neesan|neechan|jiisan|jiichan|baasan|baachan|shisou|heika|denka|kakka|tan|chama)\b").Count } else { 0 }
 
         if ($DevDebug) {
-            Write-Host "      -> English Metrics: Stopwords: $engMatches (Target: 20+ with anchors, or 28+ total)" -ForegroundColor Gray
-            Write-Host "      -> English Anchors: 'The' Count: $theCount | Honorifics: $honMatches" -ForegroundColor Gray
+            Write-Host "      -> English Metrics: Stopwords: $engMatches (Target: 30+ with anchors, or 100+ total)" -ForegroundColor Gray
+            Write-Host "      -> English Anchors: 'The' Count: $theCount (Req: 8+) | Honorifics: $honMatches" -ForegroundColor Gray
         }
         
         # Confidence Model:
-        # A: Base Lexicon (20+) + Structural Anchor (2+ "the" OR 1+ Honorific)
-        # B: High Volume Lexicon (28+) regardless of anchors (Safely handles short "the"-less scripts)
-        $isEnglish = ($engMatches -ge 28) -or ($engMatches -ge 20 -and ($theCount -ge 2 -or $honMatches -ge 1))
+        # A: Base Lexicon (30+) + Structural Anchor (8+ "the" OR 1+ Honorific)
+        # B: High Volume Lexicon (100+) regardless of anchors (Harden against Romance language overlap)
+        $isEnglish = ($engMatches -ge 100) -or ($engMatches -ge 30 -and ($theCount -ge 8 -or $honMatches -ge 1))
 
         if ($isEnglish) {
             if ($Honorifics -and $honMatches -ge 1) { 
@@ -608,7 +608,8 @@ function Extract-DialogueText {
         $script:RegexCleanBrackets = [regex]::new('\{.*?\}', 'Compiled')
         $script:RegexCleanSlashN   = [regex]::new('\\[Nnh]', 'Compiled')
         $script:RegexCleanHTML     = [regex]::new('<.*?>', 'Compiled')
-        $script:RegexLetterMatch   = [regex]::new('\p{L}[,.?!]', 'Compiled')
+        # Modified to support CJK punctuation: 、，。？！
+        $script:RegexLetterMatch   = [regex]::new('\p{L}[,.?!、，。？！]', 'Compiled')
         $script:RegexDrawCheck     = [regex]::new('\\(?:p[1-9]|clip|iclip|move|org|t)\b', 'Compiled')
         $script:RegexSyncCheck     = [regex]::new('(?:sync|karaoke|fx|ktp|auto)', 'Compiled')
         $script:RegexTechCheck     = [regex]::new('(?i)(?:circle|square|box|rectangle|line|triangle|oval|star|polygon|cm|mm|width|height|depth|circ|vert|horiz)', 'Compiled')
