@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: Wrapper_MKVMetadataAuditor+Fixer.ps1
-# VERSION: 2026.06.10__06.18.10
+# VERSION: 2026.06.19__07.06.04
 # TARGET: PowerShell 7.6.2 LTS
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -44,10 +44,10 @@ param(
     [switch]$FixDebug,
     
     [Parameter(Mandatory = $false)]
-    [switch]$FixNoSFTO,
+    [switch]$FixSFTO,
     
     [Parameter(Mandatory = $false)]
-    [switch]$FixNoSFTONoBackup,
+    [switch]$FixNoBackup,
 
     [Parameter(Mandatory = $false)]
     [switch]$Temp,
@@ -73,15 +73,15 @@ switch ($true) {
     #Audit Debug with Excluded Paths
     $AuditDebug { $profileFlags = "-DBG -ep"; break }
     #Audit+Fix Veify, fix, honorifics, audio language update, subtitles factor track order, verify, excluded paths
-    $UsualFix { $profileFlags = "-Fix -hon -audf -SFTO -VerifyUpdates -ep"; break }
+    $UsualFix { $profileFlags = "-Fix -DSA -hon -audf -VerifyUpdates -ep"; break }
     #Fix Debug
-    $FixDebug { $profileFlags = "-Fix -DSA -DBG -hon -SFTO -audf -VerifyUpdates -ep"; break }
-    #Fix No SFTO
-    $FixNoSFTO { $profileFlags = "-Fix -DSA -DBG -hon -audf -VerifyUpdates -ep"; break }
-    #Fix No SFTO
-    $FixNoSFTONoBackup { $profileFlags = "-FixNoBackup -DSA -DBG -hon -audf -VerifyUpdates -ep"; break }
+    $FixDebug { $profileFlags = "-Fix -DSA -DBG -hon -audf -VerifyUpdates -ep"; break }
+    #Fix Subtitle Factor Track Order
+    $FixSFTO { $profileFlags = "-Fix -DSA -hon -SFTO -VerifyUpdates -ep"; break }
+    #Fix No Backup
+    # $FixNoBackup { $profileFlags = "-FixNoBackup -DSA -DBG -hon -VerifyUpdates -ep"; break }
     #Temp for whatever.
-    $Temp { $profileFlags = "-Fix -fixdebug -hon -audf -SFTO -VerifyUpdates -ep"; break }
+    $Temp { $profileFlags = "-Fix -DSA -DBG -hon -VerifyUpdates -ep"; break }
     #Chinese Donghua
     $ChiD { $profileFlags = "-Fix -ovrd -vid 'chi' -aud 'chi' -sub 'eng' -audf -SFTO -DSA -DBG -VerifyUpdates -ep"; break }
     #Korean Aeni
