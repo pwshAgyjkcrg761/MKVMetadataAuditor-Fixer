@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: MKVMetadataAuditor+Fixer.ps1
-# VERSION: 2026.06.19__12.11.10
+# VERSION: 2026.06.19__15.40.00
 # TARGET: PowerShell 7.6.2 LTS
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -137,7 +137,7 @@ if ($FixNoBackup) { $Fix = $true }
 if ($DeepSubtitleAuditDebugExtraction -or $DeepSubtitleAuditLanguageDetectionLimit2 -or $DeepSubtitleAuditNOLanguageDetection) { $DeepSubtitleAudit = $true }
 
 # --- GLOBAL VERSION DEFINITION ---
-$scriptVersion = "2026.06.19__12.11.10"
+$scriptVersion = "2026.06.19__15.40.00"
 
 # Set encoding to prevent Mojibake in logs and console
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
@@ -887,6 +887,10 @@ function Get-TrackScore {
     if ($trackName -match $script:RegexDub) { 
         $score -= 100 
         [void]$ruleLog.Add("Dubtitle(-100)")
+    } 
+    if ($trackName -match "\b(SDH|HI|CC)\b" -or $t.properties.flag_hearing_impaired) { 
+        $score -= 300 
+        [void]$ruleLog.Add("SDH/HI/CC(-300)")
     } 
     if ($trackName -match "Commentary|Interview") { 
         $score -= 1000 
@@ -1804,7 +1808,7 @@ $script:RegexDub  = "(?i)dubtitles?"
 
 # [2026.06.13] Centralized Honorifics & Sanitizer
 $script:RegexHon = "(?<!\b(?:no|non|without|removed)[-\s(]*)(?:honorific|honor)"
-$script:RegexSanitizer = "(?i)\b(full|dialogue|dialog|honorifics?|honor|signs?|songs?|english|eng|subs|subtitles|main|lyrics|translated|translation|with|without|dubtitles?|for\s+dub)\b"
+$script:RegexSanitizer = "(?i)\b(full|dialogue|dialog|honorifics?|honor|signs?|songs?|english|eng|subs|subtitles|main|lyrics|translated|translation|with|without|dubtitles?|for\s+dub|sdh|hi|cc)\b"
 
 # 2. APPLY OVERRIDES FROM COMMAND LINE
 # Ensure the Video object exists in the defaults
@@ -3579,6 +3583,7 @@ foreach ($folderPath in $targetFolders) {
                                                 foreach ($item in $grpWeights) {
                                                     $tO = $item.T; 
                                                     if ($tO.properties.DSA_Handled) { continue }
+                                                    $curName = if ($tO.properties.track_name) { $tO.properties.track_name } else { "" }
                                                     $effL = if ($tO.DSA_DetectedLang) { $tO.DSA_DetectedLang } else { $tO.properties.language }
                                                     $isSmallSize = ($item.W / $maxWeight -lt $threshold)
                                                     
@@ -3598,7 +3603,7 @@ foreach ($folderPath in $targetFolders) {
 
                                                     if ($effL -match "eng|enm" -and -not $skipRename) {
                                                         $isCommentary = ($curName -match "Commentary|Interview")
-                                                        $isSDH = ($curName -match "SDH|HI|CC" -or $tO.properties.flag_hearing_impaired)
+                                                        $isSDH = ($curName -match "\b(SDH|HI|CC)\b" -or $tO.properties.flag_hearing_impaired)
                                                         
                                                         $role = if ($isSmall) { "Signs & Songs" } 
                                                                 elseif ($isCommentary -or $isLingCommentary) { "Commentary" }
@@ -3609,6 +3614,7 @@ foreach ($folderPath in $targetFolders) {
                                                         $isCorrect = if ($role -eq "Signs & Songs") { $curName -match "Signs" -and $curName -match "Songs" }
                                                                      elseif ($role -match "Honorifics") { $curName -match "Honorifics" -and $curName -match "Full Dialogue" }
                                                                      elseif ($role -eq "Full Dialogue") { $curName -match "Full Dialogue" -and $curName -notmatch "Honorifics" }
+                                                                     elseif ($role -eq "SDH/CC") { $curName -match "\b(SDH|HI|CC)\b" }
                                                                      else { $curName -match [regex]::Escape($role) }
                                                         
                                                         if ($isCorrect) { 
