@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: MKVMetadataAuditor+Fixer.ps1
-# VERSION: 2026.06.18__16.32.01
+# VERSION: 2026.06.19__12.11.10
 # TARGET: PowerShell 7.6.2 LTS
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -137,7 +137,11 @@ if ($FixNoBackup) { $Fix = $true }
 if ($DeepSubtitleAuditDebugExtraction -or $DeepSubtitleAuditLanguageDetectionLimit2 -or $DeepSubtitleAuditNOLanguageDetection) { $DeepSubtitleAudit = $true }
 
 # --- GLOBAL VERSION DEFINITION ---
-$scriptVersion = "2026.06.18__16.32.01"
+$scriptVersion = "2026.06.19__12.11.10"
+
+# Set encoding to prevent Mojibake in logs and console
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$OutputEncoding = [System.Text.Encoding]::UTF8
 
 # --- VERSION REPORTER ---
 if ($Version) {
@@ -303,7 +307,7 @@ function Get-ExclusionList {
           "# ",
           "# Example below this line. Remove the # to enable the line.",
           "# B:\Media\Movies\Sample_Folder",
-          "") | Out-File $ExcludeFile -Encoding utf8
+          "") | Out-File $ExcludeFile -Encoding utf8BOM
         return @()
     }
 
@@ -883,6 +887,10 @@ function Get-TrackScore {
     if ($trackName -match $script:RegexDub) { 
         $score -= 100 
         [void]$ruleLog.Add("Dubtitle(-100)")
+    } 
+    if ($trackName -match "Commentary|Interview") { 
+        $score -= 1000 
+        [void]$ruleLog.Add("Commentary(-1000)")
     } 
 
     # 4. Honorifics Scoring
@@ -2196,7 +2204,7 @@ if ($fast) {
 $sessionProgressIndex = 0
 if ($NoHwVideoSearch) {
     # Initialize log with placeholder to ensure the file exists for appending
-    @("--- SCAN IN PROGRESS ---", "Results will be finalized at the end of the session.", "") | Out-File -LiteralPath $noHwLog -Encoding utf8
+    @("--- SCAN IN PROGRESS ---", "Results will be finalized at the end of the session.", "") | Out-File -LiteralPath $noHwLog -Encoding utf8BOM
 }
 
 foreach ($folderPath in $targetFolders) {
@@ -2234,7 +2242,7 @@ foreach ($folderPath in $targetFolders) {
         $skipOutput.Add("") # Blank line after
         $skipOutput.Add("") # Blank line after
         
-        $skipOutput | Out-File $detailLog -Append -Encoding utf8
+        $skipOutput | Out-File $detailLog -Append -Encoding utf8BOM
         
         continue
     }
@@ -2422,7 +2430,7 @@ foreach ($folderPath in $targetFolders) {
             }
             
             # 2. Log path to file
-            $f.FullName | Out-File $pathLog -Append -Encoding utf8
+            $f.FullName | Out-File $pathLog -Append -Encoding utf8BOM
             
             # 3. Retrieve pre-probed data instantly from memory
             $cached = $probeMap[$f.FullName]
@@ -2486,7 +2494,7 @@ foreach ($folderPath in $targetFolders) {
         # Print folder header to mismatch log if needed
         if ($mismatches -gt 0) {
             $spacer = if (Test-Path $missLog) { "`r`n" } else { "" }
-            "${spacer}Folder: $($folder.FullName)" | Out-File $missLog -Append -Encoding utf8
+            "${spacer}Folder: $($folder.FullName)" | Out-File $missLog -Append -Encoding utf8BOM
         }
 
         # --- PROCESS GROUPS ---
@@ -2627,12 +2635,12 @@ foreach ($folderPath in $targetFolders) {
             }
 
             # --- APPEND TO MASTER LOG ---
-            $entry | Out-File $detailLog -Append -Encoding utf8
+            $entry | Out-File $detailLog -Append -Encoding utf8BOM
             
             # --- APPEND TO MISMATCH LOG (ONLY IF NOT PRIMARY) ---
             # If the folder has ANY mismatches, include EVERY group (Primary + Mismatches)
             if ($mismatches -gt 0) {
-                $entry | Out-File $missLog -Append -Encoding utf8
+                $entry | Out-File $missLog -Append -Encoding utf8BOM
             }
         } # <--- END GROUPS LOOP
 
@@ -2718,11 +2726,7 @@ foreach ($folderPath in $targetFolders) {
                             $probeMap = @{}
                             foreach ($sub in $allSubs) {
                                 $isImg = ($sub.codec -match "PGS|VobSub")
-                                $isLoneImg = $isImg -and -not ($allSubs | Where-Object { $_.id -ne $sub.id -and $_.codec -eq $sub.codec -and $_.properties.language -eq $sub.properties.language })
-                                if ($isLoneImg) {
-                                    if ($devDebugActive) { Write-Host "  [DevDebug-DSA] Skip Extraction: Track $($sub.id + 1) is a lone Picture track (No pair for ratio)." -ForegroundColor DarkGray }
-                                    continue
-                                }
+                                # Extraction is required even for lone tracks to verify Dialogue vs. Signs density
                                 
                                 $ext = &$getExtSb -Codec $sub.codec
                                 $tmpPath = Join-Path $tempDir "track$($sub.id + 1).$ext"
@@ -2926,7 +2930,7 @@ foreach ($folderPath in $targetFolders) {
                     [void]$fixDetails.Add("FILE: $($fToFix.FullName)")
                     [void]$fixDetails.Add("  [!] SKIPPING FILE: Multiple video tracks detected ($videoCount).")
                     [void]$fixDetails.Add("") # Add spacing
-                    $fixDetails | Out-File $fixerLog -Append -Encoding utf8
+                    $fixDetails | Out-File $fixerLog -Append -Encoding utf8BOM
                     continue 
                 }
 
@@ -3330,8 +3334,8 @@ foreach ($folderPath in $targetFolders) {
                                 foreach ($tH in $ambiguousTracks) {
                                     $curName = if ($tH.properties.track_name) { $tH.properties.track_name } else { "" }
 
-                                    # [FIX] Hard Bypass: Never rename tracks explicitly tagged as Dubtitles
-                                    if ($curName -match $script:RegexDub) {
+                                    # [FIX] Hard Bypass: Never rename tracks explicitly tagged as Dubtitles or Commentary
+                                    if ($curName -match $script:RegexDub -or $curName -match "Commentary|Interview") {
                                         $tH.properties | Add-Member -NotePropertyName "DSA_Handled" -NotePropertyValue $true -Force
                                         continue
                                     }
@@ -3365,9 +3369,10 @@ foreach ($folderPath in $targetFolders) {
 
                                         # 2. Truth-Based Naming: If bitstream proved standard English, demote 'Honorifics' liar.
                                         $cleanGroupName = &$SanitizeName $curName
-                                        $prefix = if ($tH.DSA_DetectedLang -eq "enm") { "Honorifics Full Dialogue" }
-                                                  elseif ($tH.DSA_DetectedLang -eq "eng") { "Full Dialogue" }
-                                                  else { "Honorifics Full Dialogue" } # Trust name for picture subs/skipped scans
+                                        $isComm = ($curName -match "Commentary|Interview")
+                                        $prefix = if ($tH.DSA_DetectedLang -eq "enm") { if ($isComm) { "Honorifics Commentary" } else { "Honorifics Full Dialogue" } }
+                                                  elseif ($tH.DSA_DetectedLang -eq "eng") { if ($isComm) { "Commentary" } else { "Full Dialogue" } }
+                                                  else { if ($isComm) { "Honorifics Commentary" } else { "Honorifics Full Dialogue" } } # Trust name for picture subs/skipped scans
                                         
                                         $newName = if ([string]::IsNullOrWhiteSpace($cleanGroupName)) { $prefix } else { "$prefix [$cleanGroupName]" }
                                         
@@ -3772,7 +3777,11 @@ foreach ($folderPath in $targetFolders) {
 
                     # PREFERRED OR NOTHING: Use Effective Language to authorize the Default flag
                     $winnerEffLang = if ($dsaDetected -and $dsaDetected -ne "und") { $dsaDetected } else { $winner.Lang }
-                    $isWinnerValidForDefault = ($winnerEffLang -eq $targetSubLang) -or ($winnerEffLang -eq "und") -or $isWinnerHon
+                    # Authorize default if language matches, is undefined, is honorific, OR is the lone confirmed dialogue track
+                    $isWinnerValidForDefault = ($winnerEffLang -eq $targetSubLang) -or 
+                                               ($winnerEffLang -eq "und") -or 
+                                               $isWinnerHon -or 
+                                               ($subCandidates.Count -eq 1 -and $winner.Name -match $script:RegexDiag)
                     $targetDefaultValue = if ($isWinnerValidForDefault) { 1 } else { 0 }
 
                     # [FIX] Winner Needs Fix if current language doesn't match the corrected target language
@@ -3883,7 +3892,7 @@ foreach ($folderPath in $targetFolders) {
                         [void]$fixDetails.Add("  STATUS: Changes applied to -> $targetFile")
                     }
                 }
-                [void]$fixDetails.Add(""); $fixDetails | Out-File $fixerLog -Append -Encoding utf8
+                [void]$fixDetails.Add(""); $fixDetails | Out-File $fixerLog -Append -Encoding utf8BOM
             } # <--- END SEQUENTIAL FILES LOOP
             Write-Host "" # Clear progress bar line
         } # <--- v2026.05.13_11.23.00 - END OF THE "ELSE" AUDITOR BYPASS # <--- v2026.05.13_11.23.00 - END OF THE "ELSE" AUDITOR BYPASS
@@ -3893,13 +3902,13 @@ foreach ($folderPath in $targetFolders) {
     # --- STANDARD AUDITOR LOGGING ---
     # This only runs if $NoHwVideoSearch is FALSE because of the 'continue' above
     $spacer = "`r`n💜 • 💙 • 🦋 • ❤️ • 💛 • 🦋 • 💜 • 💙 • 🦋 • ❤️ • 💛 • 🦋 • 💜 • 💙 • 🦋 • ❤️ • 💛`r`n"
-    $spacer | Out-File $detailLog -Append -Encoding utf8
+    $spacer | Out-File $detailLog -Append -Encoding utf8BOM
     
     $compEntry = New-Object System.Collections.Generic.List[string]
     $compEntry.Add("Folder: $($folderPath.FullName)")
     $compEntry.Add($matchStatus)
     $compEntry.Add("Total: $($mkvFiles.Count) | Matches Primary: $($primaryGroup.Files.Count) | Mismatches: $mismatches`r`n")
-    $compEntry | Out-File $compLog -Append -Encoding utf8
+    $compEntry | Out-File $compLog -Append -Encoding utf8BOM
     
 } # <--- END FOLDER LOOP
 
@@ -3986,7 +3995,9 @@ if ($NoHwVideoSearch) {
         
         # 4. Perform the final surgical overwrite
         # Use .NET WriteAllLines to bypass PowerShell's formatting engine entirely
-        [System.IO.File]::WriteAllLines($noHwLog, [string[]]$finalOutput, [System.Text.Encoding]::UTF8)
+        # Use a UTF8 Encoding with a BOM to ensure Notepad++ identifies it correctly
+        $utf8BOM = New-Object System.Text.UTF8Encoding($true)
+        [System.IO.File]::WriteAllLines($noHwLog, [string[]]$finalOutput, $utf8BOM)
     }
 }
 
