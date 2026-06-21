@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: MKVMetadataAuditor+Fixer.ps1
-# VERSION: 2026.06.19__15.40.00
+# VERSION: 2026.06.20__20.33.00
 # TARGET: PowerShell 7.6.2 LTS
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -137,7 +137,7 @@ if ($FixNoBackup) { $Fix = $true }
 if ($DeepSubtitleAuditDebugExtraction -or $DeepSubtitleAuditLanguageDetectionLimit2 -or $DeepSubtitleAuditNOLanguageDetection) { $DeepSubtitleAudit = $true }
 
 # --- GLOBAL VERSION DEFINITION ---
-$scriptVersion = "2026.06.19__15.40.00"
+$scriptVersion = "2026.06.20__20.33.00"
 
 # Set encoding to prevent Mojibake in logs and console
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
@@ -935,13 +935,20 @@ function Get-TrackScore {
 
     # 6. Fansub Group Priority
     if (-not $Western -and $fixerConfig.Subtitles.FansubGroupPriority -and $fixerConfig.Subtitles.FansubGroupPriority.Count -gt 0 -and $trackName) {
+        $isUnsafeRole = ($trackName -match $RegexSign -or $trackName -match $script:RegexDub -or $trackName -match "Commentary|Interview")
         for ($i = 0; $i -lt $fixerConfig.Subtitles.FansubGroupPriority.Count; $i++) {
             $groupTarget = $fixerConfig.Subtitles.FansubGroupPriority[$i]
             if ($trackName -like "*$groupTarget*") {
-                $bonus = (10000 - ($i * 1000))
-                $score += $bonus
-                [void]$ruleLog.Add("Fansub(${groupTarget}:+$bonus)")
-                break
+                # Only apply bonus to Unsafe tracks if the group keyword specifically targets that role
+                $isIntentionalSpecialty = ($groupTarget -match "$RegexSign|Commentary|Dub")
+                if (-not $isUnsafeRole -or $isIntentionalSpecialty) {
+                    $bonus = (10000 - ($i * 1000))
+                    $score += $bonus
+                    [void]$ruleLog.Add("Fansub(${groupTarget}:+$bonus)")
+                    break
+                } else {
+                    [void]$ruleLog.Add("Fansub_Ignored(${groupTarget}:Role_Mismatch)")
+                }
             }
         }
     }
@@ -3606,7 +3613,7 @@ foreach ($folderPath in $targetFolders) {
                                                         $isSDH = ($curName -match "\b(SDH|HI|CC)\b" -or $tO.properties.flag_hearing_impaired)
                                                         
                                                         $role = if ($isSmall) { "Signs & Songs" } 
-                                                                elseif ($isCommentary -or $isLingCommentary) { "Commentary" }
+                                                                elseif ($isCommentary -or ($isLingCommentary -and $isGlobalCommentaryEnv)) { "Commentary" }
                                                                 elseif ($isSDH) { "SDH/CC" }
                                                                 else { if ($isHon) { "Honorifics Full Dialogue" } else { "Full Dialogue" } }
                                                         
