@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: MKVMetadataAuditor+Fixer.ps1
-# VERSION: 2026.06.21__13.23.00
+# VERSION: 2026.06.22__13.03.00
 # TARGET: PowerShell 7.6.2 LTS
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -12,7 +12,7 @@
 # ==============================================================================
 # <PROTECTED>
 # ==============================================================================
-# AI INSTRUCTIONS v2026.06.13__13.53.01 : 
+# AI INSTRUCTIONS v2026.06.22__07.26.48 : 
 # 1. HEADER: Update Version comment.
 #    - VERSIONING: Update using CHICAGO TIME (Central Time), 24 hour clock.
 #    - OUTPUT: When printing the updated version, only provide the new version
@@ -22,6 +22,8 @@
 #    - STAMP ACCURACY: Ensure the minutes match the current Chicago clock exactly.
 # 2. DO NOT modify or refactor any code inside <PROTECTED> tags.
 # 3. SCRIPT OUTPUT (SURGICAL FIXES ONLY):
+#    - When printing the updated version, only provide the new version
+#      number. Do not describe the change as complex or explain the edit.
 #    - Provide minimal, highly targeted, surgical edits. Do not rewrite large blocks or entire functions unless explicitly requested.
 #    - When printing the script, only print snippets unless asked for the entire script.
 #    - Always use a codebox with a copy button.
@@ -137,7 +139,7 @@ if ($FixNoBackup) { $Fix = $true }
 if ($DeepSubtitleAuditDebugExtraction -or $DeepSubtitleAuditLanguageDetectionLimit2 -or $DeepSubtitleAuditNOLanguageDetection) { $DeepSubtitleAudit = $true }
 
 # --- GLOBAL VERSION DEFINITION ---
-$scriptVersion = "2026.06.21__13.23.00"
+$scriptVersion = "2026.06.22__13.03.00"
 
 # Set encoding to prevent Mojibake in logs and console
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
@@ -373,7 +375,12 @@ function Test-IsExcluded {
         [switch]$Active
     )
     if (-not $Active -or $Exclusions.Count -eq 0) { return $false }
-    return $Exclusions -contains $CurrentPath.TrimEnd('\')
+    $p = $CurrentPath.TrimEnd('\')
+    foreach ($ex in $Exclusions) {
+        $target = $ex.TrimEnd('\')
+        if ($p -eq $target -or $p.StartsWith("$target\", "OrdinalIgnoreCase")) { return $true }
+    }
+    return $false
 }
 
 # [FROM: MKVMetadataAuditor+Fixer.SearchH10P.ps1]
@@ -579,14 +586,14 @@ function Detect-SubtitleLanguage {
 
         $engDensity = $engMatches / $total
         if ($DevDebug) {
-            Write-Host "      -> English Metrics: Stopwords: $engMatches (Density: $([Math]::Round($engDensity * 100, 2))% - Req: 0.75% for Latin)" -ForegroundColor Gray
-            Write-Host "      -> English Anchors: 'The' Count: $theCount (Req: 8+) | Honorifics: $honMatches (Req: 3 for enm)" -ForegroundColor Gray
+            Write-Host "      -> English Metrics: Stopwords: $engMatches (Density: $([Math]::Round($engDensity * 100, 2))% - Req: 0.75% + Anchor x5)" -ForegroundColor Gray
+            Write-Host "      -> English Anchors: 'The' Count: $theCount (Req: 8+ or 5 for HighVol) | Honorifics: $honMatches (Req: 3 for enm)" -ForegroundColor Gray
         }
         
-        # Confidence Model:
-        # A: High Volume Lexicon (100+) + Density Floor (0.75%)
-        # B: Base Lexicon (30+) + English Anchor ("the" x8) + Density Floor (0.75%) + Structural Anchor (8+ "the" OR 3+ Honorifics)
-        $isEnglish = ($engMatches -ge 100 -and $engDensity -ge 0.0075) -or ($engMatches -ge 30 -and $engDensity -ge 0.0075 -and $theCount -ge 8 -or ($theCount -ge 3 -and $honMatches -ge 3))
+        # Confidence Model (Hardened with Anchor word requirement):
+        # A: High Volume Lexicon (100+) + Density Floor (0.75%) + Anchor ("the" x5)
+        # B: Base Lexicon (30+) + Density Floor (0.75%) + Structural Anchor (8+ "the" OR 3+ Honorifics)
+        $isEnglish = ($engMatches -ge 100 -and $engDensity -ge 0.0075 -and $theCount -ge 5) -or ($engMatches -ge 30 -and $engDensity -ge 0.0075 -and $theCount -ge 8 -or ($theCount -ge 3 -and $honMatches -ge 3))
 
         if ($isEnglish) {
             if ($Honorifics -and $honMatches -ge 3) { 
@@ -3346,8 +3353,9 @@ foreach ($folderPath in $targetFolders) {
                                 foreach ($tH in $ambiguousTracks) {
                                     $curName = if ($tH.properties.track_name) { $tH.properties.track_name } else { "" }
 
-                                    # [FIX] Hard Bypass: Never rename tracks explicitly tagged as Dubtitles or Commentary
-                                    if ($curName -match $script:RegexDub -or $curName -match "Commentary|Interview") {
+                                    # [FIX] Hard Bypass: Never rename tracks explicitly tagged as Dubtitles, Commentary, or CC/SDH (Name or Flag)
+                                    $isAccessibility = ($curName -match "\b(SDH|HI|CC)\b" -or $tH.properties.flag_hearing_impaired)
+                                    if ($curName -match $script:RegexDub -or $curName -match "Commentary|Interview" -or $isAccessibility) {
                                         $tH.properties | Add-Member -NotePropertyName "DSA_Handled" -NotePropertyValue $true -Force
                                         continue
                                     }
@@ -3484,8 +3492,10 @@ foreach ($folderPath in $targetFolders) {
                                                 
                                                 if ($ratio -ge $minReq -and $isDualEng) {
                                                     $actionMsg = ""
-                                                    # [FIX] Pairing Bypass: Skip renaming if either track is a Dubtitle
-                                                    if ($nameL -match $script:RegexDub -or $nameS -match $script:RegexDub) {
+                                                    # [FIX] Pairing Bypass: Skip renaming if either track is a Dubtitle, Commentary, or CC/SDH (Name or Flag)
+                                                    $isAccL = ($nameL -match "\b(SDH|HI|CC)\b" -or $largeTrack.properties.flag_hearing_impaired)
+                                                    $isAccS = ($nameS -match "\b(SDH|HI|CC)\b" -or $smallTrack.properties.flag_hearing_impaired)
+                                                    if ($nameL -match $script:RegexDub -or $nameS -match $script:RegexDub -or $isAccL -or $isAccS -or $nameL -match "Commentary|Interview" -or $nameS -match "Commentary|Interview") {
                                                         $largeTrack.properties | Add-Member -NotePropertyName "DSA_Handled" -NotePropertyValue $true -Force
                                                         $smallTrack.properties | Add-Member -NotePropertyName "DSA_Handled" -NotePropertyValue $true -Force
                                                         continue
@@ -3574,10 +3584,13 @@ foreach ($folderPath in $targetFolders) {
                                             $threshold = 0.45
 
                                             if ($minWeight -gt 0 -and $maxWeight -gt 0 -and ($minWeight / $maxWeight -lt $threshold)) {
-                                                # [FIX] Outlier Pre-Check: Protect Dubtitles from being considered for rename
+                                                # [FIX] Outlier Pre-Check: Protect Dubtitles, Commentary, and CC/SDH (Name or Flag) from being considered for rename
                                                 foreach ($item in $grpWeights) {
                                                     $tO = $item.T; $curName = if ($tO.properties.track_name) { $tO.properties.track_name } else { "" }
-                                                    if ($curName -match $script:RegexDub) { $tO.properties | Add-Member -NotePropertyName "DSA_Handled" -NotePropertyValue $true -Force }
+                                                    $isAcc = ($curName -match "\b(SDH|HI|CC)\b" -or $tO.properties.flag_hearing_impaired)
+                                                    if ($curName -match $script:RegexDub -or $curName -match "Commentary|Interview" -or $isAcc) { 
+                                                        $tO.properties | Add-Member -NotePropertyName "DSA_Handled" -NotePropertyValue $true -Force 
+                                                    }
                                                 }
                                                 $grpName = if ($isTextGrp) { "TEXT" } else { $grpWeights[0].T.codec }
                                                 
