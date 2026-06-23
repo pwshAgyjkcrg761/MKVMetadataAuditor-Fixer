@@ -1,7 +1,7 @@
 # ==============================================================================
 # SCRIPT: MKVMetadataAuditor+Fixer.ps1
-# VERSION: 2026.06.22__13.03.00
-# TARGET: PowerShell 7.6.2 LTS
+# VERSION: 2026.06.23__09.39.56
+# TARGET: PowerShell 7.6.3 LTS
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
 # 
@@ -12,7 +12,7 @@
 # ==============================================================================
 # <PROTECTED>
 # ==============================================================================
-# AI INSTRUCTIONS v2026.06.22__07.26.48 : 
+# AI INSTRUCTIONS v2026.06.23__09.31.51 : 
 # 1. HEADER: Update Version comment.
 #    - VERSIONING: Update using CHICAGO TIME (Central Time), 24 hour clock.
 #    - OUTPUT: When printing the updated version, only provide the new version
@@ -20,15 +20,17 @@
 #    - CRITICAL: Do not use AI system time. Use the time provided in the most 
 #      recent user prompt or link (Ref: https://www.timeanddate.com/worldclock/usa/chicago).
 #    - STAMP ACCURACY: Ensure the minutes match the current Chicago clock exactly.
+#
 # 2. DO NOT modify or refactor any code inside <PROTECTED> tags.
 # 3. SCRIPT OUTPUT (SURGICAL FIXES ONLY):
-#    - When printing the updated version, only provide the new version
-#      number. Do not describe the change as complex or explain the edit.
+#    - VERSIONING/OUTPUT: Follow the Versioning and Output rules defined in Section 1.
 #    - Provide minimal, highly targeted, surgical edits. Do not rewrite large blocks or entire functions unless explicitly requested.
 #    - When printing the script, only print snippets unless asked for the entire script.
 #    - Always use a codebox with a copy button.
 #    - If there are multiple modifications, present them strictly ONE step at a time,
-#      and wait for user confirmation before proceeding to the next step.
+#      and wait for user confirmation before proceeding to the next step. 
+#      NOTE: The Version Header update is an atomic action and must be output 
+#      immediately upon any code change, regardless of the step-by-step flow.
 #
 # 4. VERBATIM ANCHOR PROTOCOL:
 #    - To facilitate "Find" in Notepad++ always structure edits with:
@@ -36,14 +38,15 @@
 #     - "Verbatim Anchor (After)" - The exact lines of existing code immediately after the change.
 #     - "Snippet to REPLACE" - The exact code block to be deleted.
 #     - "What to PASTE in its place" - The new code block to be inserted.
-#   - Do not summarize, truncate, or refactor the existing code used as an anchor.
-#   - Copy spaces, comments, and symbols exactly as they appear in the file.
-#   - Keep anchors and replacement snippets as small and precise as possible to isolate only the necessary change.
+#    - Do not summarize, truncate, or refactor the existing code used as an anchor.
+#    - Copy spaces, comments, and symbols exactly as they appear in the file.
+#    - Keep anchors and replacement snippets as small and precise as possible to isolate only the necessary change.
 #
 # 5. CONTENT PRESERVATION:
 #    - Do not remove, modify, or strip out telemetry data or DevDebug information 
 #      from any provided code.
-# ==============================================================================
+#==============================================================================
+#==============================================================================
 # </PROTECTED>
 
 [CmdletBinding()]
@@ -139,7 +142,7 @@ if ($FixNoBackup) { $Fix = $true }
 if ($DeepSubtitleAuditDebugExtraction -or $DeepSubtitleAuditLanguageDetectionLimit2 -or $DeepSubtitleAuditNOLanguageDetection) { $DeepSubtitleAudit = $true }
 
 # --- GLOBAL VERSION DEFINITION ---
-$scriptVersion = "2026.06.22__13.03.00"
+$scriptVersion = "2026.06.23__09.39.56"
 
 # Set encoding to prevent Mojibake in logs and console
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
@@ -1537,8 +1540,8 @@ if ($DevDebug) {
     Write-Host "  -> MediaInfo CLI: $mediainfoExe`n" -ForegroundColor Gray
 }
 
-if ($PSVersionTable.PSVersion -lt [version]"7.6.2") {
-    Write-Host "ERROR: Running on version $($PSVersionTable.PSVersion). This script requires at least 7.6.2." -ForegroundColor DarkRed
+if ($PSVersionTable.PSVersion -lt [version]"7.6.0") {
+    Write-Host "ERROR: Running on version $($PSVersionTable.PSVersion). This script requires at least 7.6.0." -ForegroundColor DarkRed
     Pause; exit
 }
 
