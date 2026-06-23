@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: MKVMetadataAuditor+Fixer.ps1
-# VERSION: 2026.06.15__13.12.00
+# VERSION: 2026.06.22__13.03.00
 # TARGET: PowerShell 7.6.2 LTS
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -12,7 +12,7 @@
 # ==============================================================================
 # <PROTECTED>
 # ==============================================================================
-# AI INSTRUCTIONS v2026.06.13__13.53.01 : 
+# AI INSTRUCTIONS v2026.06.22__07.26.48 : 
 # 1. HEADER: Update Version comment.
 #    - VERSIONING: Update using CHICAGO TIME (Central Time), 24 hour clock.
 #    - OUTPUT: When printing the updated version, only provide the new version
@@ -22,6 +22,8 @@
 #    - STAMP ACCURACY: Ensure the minutes match the current Chicago clock exactly.
 # 2. DO NOT modify or refactor any code inside <PROTECTED> tags.
 # 3. SCRIPT OUTPUT (SURGICAL FIXES ONLY):
+#    - When printing the updated version, only provide the new version
+#      number. Do not describe the change as complex or explain the edit.
 #    - Provide minimal, highly targeted, surgical edits. Do not rewrite large blocks or entire functions unless explicitly requested.
 #    - When printing the script, only print snippets unless asked for the entire script.
 #    - Always use a codebox with a copy button.
@@ -137,7 +139,11 @@ if ($FixNoBackup) { $Fix = $true }
 if ($DeepSubtitleAuditDebugExtraction -or $DeepSubtitleAuditLanguageDetectionLimit2 -or $DeepSubtitleAuditNOLanguageDetection) { $DeepSubtitleAudit = $true }
 
 # --- GLOBAL VERSION DEFINITION ---
-$scriptVersion = "2026.06.15__13.12.00"
+$scriptVersion = "2026.06.22__13.03.00"
+
+# Set encoding to prevent Mojibake in logs and console
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$OutputEncoding = [System.Text.Encoding]::UTF8
 
 # --- VERSION REPORTER ---
 if ($Version) {
@@ -303,7 +309,7 @@ function Get-ExclusionList {
           "# ",
           "# Example below this line. Remove the # to enable the line.",
           "# B:\Media\Movies\Sample_Folder",
-          "") | Out-File $ExcludeFile -Encoding utf8
+          "") | Out-File $ExcludeFile -Encoding utf8BOM
         return @()
     }
 
@@ -369,7 +375,12 @@ function Test-IsExcluded {
         [switch]$Active
     )
     if (-not $Active -or $Exclusions.Count -eq 0) { return $false }
-    return $Exclusions -contains $CurrentPath.TrimEnd('\')
+    $p = $CurrentPath.TrimEnd('\')
+    foreach ($ex in $Exclusions) {
+        $target = $ex.TrimEnd('\')
+        if ($p -eq $target -or $p.StartsWith("$target\", "OrdinalIgnoreCase")) { return $true }
+    }
+    return $false
 }
 
 # [FROM: MKVMetadataAuditor+Fixer.SearchH10P.ps1]
@@ -540,7 +551,7 @@ function Detect-SubtitleLanguage {
 
     if ([string]::IsNullOrWhiteSpace($text)) { 
         if ($DevDebug) { Write-Host "      -> No usable text found after dialogue extraction (Stripped)." -ForegroundColor DarkYellow }
-        return "und" 
+        return "und:0:0" 
     }
     
     $total = $text.Length
@@ -557,9 +568,9 @@ function Detect-SubtitleLanguage {
         
     }
 
-    if ($korCount / $total -gt 0.15) { if ($DevDebug) { Write-Host "      -> MATCH: Korean (Hangul)" -ForegroundColor Green }; return "kor:0" }
-    if ($jpnCount / $total -gt 0.05) { if ($DevDebug) { Write-Host "      -> MATCH: Japanese (Kana)" -ForegroundColor Green }; return "jpn:0" }
-    if ($chiCount / $total -gt 0.15) { if ($DevDebug) { Write-Host "      -> MATCH: Chinese (Han)" -ForegroundColor Green }; return "chi:0" }
+    if ($korCount / $total -gt 0.15) { if ($DevDebug) { Write-Host "      -> MATCH: Korean (Hangul)" -ForegroundColor Green }; return "kor:0:0" }
+    if ($jpnCount / $total -gt 0.05) { if ($DevDebug) { Write-Host "      -> MATCH: Japanese (Kana)" -ForegroundColor Green }; return "jpn:0:0" }
+    if ($chiCount / $total -gt 0.15) { if ($DevDebug) { Write-Host "      -> MATCH: Chinese (Han)" -ForegroundColor Green }; return "chi:0:0" }
 
     
     # 2. Latin-Based Language Detection
@@ -568,35 +579,36 @@ function Detect-SubtitleLanguage {
         if ($DevDebug) { Write-Host "      -> Latin Script Density: $([Math]::Round(($latin / $total) * 100, 2))%" -ForegroundColor Gray }
         
         # English Verification Logic (Hardened Stopwords)
-        $engStopwords = "\b(the|you|with|this|they|have|from|your|that|what|will|would|should|could|there|their)\b"
+        $engStopwords = "\b(the|you|with|this|they|have|from|your|that|what|will|would|should|could|there|their|through|and|but|or|which|because|these|those|been|had|has|were|was|who|whom|does|did|a|an)\b"
         $engMatches = [regex]::Matches($text, $engStopwords).Count
         $theCount = [regex]::Matches($text, "\bthe\b").Count
         $honMatches = if ($Honorifics) { [regex]::Matches($text, "-(?:san|kun|chan|sama|dono|senpai|kohai|sensei|niisan|niichan|neesan|neechan|jiisan|jiichan|baasan|baachan|shisou|heika|denka|kakka|tan|chama)\b").Count } else { 0 }
 
+        $engDensity = $engMatches / $total
         if ($DevDebug) {
-            Write-Host "      -> English Metrics: Stopwords: $engMatches (Target: 20+ with anchors, or 28+ total)" -ForegroundColor Gray
-            Write-Host "      -> English Anchors: 'The' Count: $theCount | Honorifics: $honMatches" -ForegroundColor Gray
+            Write-Host "      -> English Metrics: Stopwords: $engMatches (Density: $([Math]::Round($engDensity * 100, 2))% - Req: 0.75% + Anchor x5)" -ForegroundColor Gray
+            Write-Host "      -> English Anchors: 'The' Count: $theCount (Req: 8+ or 5 for HighVol) | Honorifics: $honMatches (Req: 3 for enm)" -ForegroundColor Gray
         }
         
-        # Confidence Model:
-        # A: Base Lexicon (20+) + Structural Anchor (2+ "the" OR 1+ Honorific)
-        # B: High Volume Lexicon (28+) regardless of anchors (Safely handles short "the"-less scripts)
-        $isEnglish = ($engMatches -ge 28) -or ($engMatches -ge 20 -and ($theCount -ge 2 -or $honMatches -ge 1))
+        # Confidence Model (Hardened with Anchor word requirement):
+        # A: High Volume Lexicon (100+) + Density Floor (0.75%) + Anchor ("the" x5)
+        # B: Base Lexicon (30+) + Density Floor (0.75%) + Structural Anchor (8+ "the" OR 3+ Honorifics)
+        $isEnglish = ($engMatches -ge 100 -and $engDensity -ge 0.0075 -and $theCount -ge 5) -or ($engMatches -ge 30 -and $engDensity -ge 0.0075 -and $theCount -ge 8 -or ($theCount -ge 3 -and $honMatches -ge 3))
 
         if ($isEnglish) {
-            if ($Honorifics -and $honMatches -ge 1) { 
+            if ($Honorifics -and $honMatches -ge 3) { 
                 if ($DevDebug) { Write-Host "      -> MATCH: English (Japanese Honorifics) [enm] (Header: eng)" -ForegroundColor Green }
-                return "enm:$honMatches" 
+                return "enm:${honMatches}:${theCount}" 
             }
             if ($DevDebug) { Write-Host "      -> MATCH: English [eng]" -ForegroundColor Green }
-            return "eng:0" 
+            return "eng:0:${theCount}" 
         }
 
         # Safety Fallback
         if ($DevDebug) { Write-Host "      -> NO MATCH: Fallback to header language ($CurrentLang)" -ForegroundColor DarkYellow }
-        return "$CurrentLang:0"
+        return "${CurrentLang}:0:0"
     }
-    return "und"
+    return "und:0:0"
 }
 
 function Extract-DialogueText {
@@ -608,7 +620,8 @@ function Extract-DialogueText {
         $script:RegexCleanBrackets = [regex]::new('\{.*?\}', 'Compiled')
         $script:RegexCleanSlashN   = [regex]::new('\\[Nnh]', 'Compiled')
         $script:RegexCleanHTML     = [regex]::new('<.*?>', 'Compiled')
-        $script:RegexLetterMatch   = [regex]::new('\p{L}[,.?!]', 'Compiled')
+        # Modified to support CJK punctuation: 、，。？！
+        $script:RegexLetterMatch   = [regex]::new('\p{L}[,.?!、，。？！]', 'Compiled')
         $script:RegexDrawCheck     = [regex]::new('\\(?:p[1-9]|clip|iclip|move|org|t)\b', 'Compiled')
         $script:RegexSyncCheck     = [regex]::new('(?:sync|karaoke|fx|ktp|auto)', 'Compiled')
         $script:RegexTechCheck     = [regex]::new('(?i)(?:circle|square|box|rectangle|line|triangle|oval|star|polygon|cm|mm|width|height|depth|circ|vert|horiz)', 'Compiled')
@@ -776,6 +789,7 @@ function Get-AuditFlags {
             if ($subs | Where-Object { $_.properties.language -eq "eng" -and $_.properties.flag_hearing_impaired }) { $reasons += "👂[ENG Sub HI/CC] " }
             if ($subs | Where-Object { $_.properties.track_name -match "SDH" }) { $reasons += "🙉[SDH Name] " }
             if ($subs | Where-Object { $_.properties.flag_hearing_impaired }) { $reasons += "👀[Sub HI/CC] " }
+            if ($subs | Where-Object { $_.properties.language -eq "enm" }) { $reasons += "💮 [Enm: Honorifics Sub] " }
         }
         if ($subs | Where-Object { $_.properties.language -eq "jpn" }) { $reasons += "⛩️[JPN Sub Present] " }
     }
@@ -877,6 +891,18 @@ function Get-TrackScore {
     if ($trackName -match $RegexSign) { 
         $score -= 200 
         [void]$ruleLog.Add("SignsSongs(-200)")
+    }
+    if ($trackName -match $script:RegexDub) { 
+        $score -= 100 
+        [void]$ruleLog.Add("Dubtitle(-100)")
+    } 
+    if ($trackName -match "\b(SDH|HI|CC)\b" -or $t.properties.flag_hearing_impaired) { 
+        $score -= 300 
+        [void]$ruleLog.Add("SDH/HI/CC(-300)")
+    } 
+    if ($trackName -match "Commentary|Interview") { 
+        $score -= 1000 
+        [void]$ruleLog.Add("Commentary(-1000)")
     } 
 
     # 4. Honorifics Scoring
@@ -917,13 +943,20 @@ function Get-TrackScore {
 
     # 6. Fansub Group Priority
     if (-not $Western -and $fixerConfig.Subtitles.FansubGroupPriority -and $fixerConfig.Subtitles.FansubGroupPriority.Count -gt 0 -and $trackName) {
+        $isUnsafeRole = ($trackName -match $RegexSign -or $trackName -match $script:RegexDub -or $trackName -match "Commentary|Interview")
         for ($i = 0; $i -lt $fixerConfig.Subtitles.FansubGroupPriority.Count; $i++) {
             $groupTarget = $fixerConfig.Subtitles.FansubGroupPriority[$i]
             if ($trackName -like "*$groupTarget*") {
-                $bonus = (10000 - ($i * 1000))
-                $score += $bonus
-                [void]$ruleLog.Add("Fansub(${groupTarget}:+$bonus)")
-                break
+                # Only apply bonus to Unsafe tracks if the group keyword specifically targets that role
+                $isIntentionalSpecialty = ($groupTarget -match "$RegexSign|Commentary|Dub")
+                if (-not $isUnsafeRole -or $isIntentionalSpecialty) {
+                    $bonus = (10000 - ($i * 1000))
+                    $score += $bonus
+                    [void]$ruleLog.Add("Fansub(${groupTarget}:+$bonus)")
+                    break
+                } else {
+                    [void]$ruleLog.Add("Fansub_Ignored(${groupTarget}:Role_Mismatch)")
+                }
             }
         }
     }
@@ -1785,11 +1818,12 @@ $codecMap = @{
 $script:RegexDiag = "Dialog|Full|Japanese Audio|Main"
 # Streamlined Sign logic: Opening/Ending/OP/ED added.
 # Added word boundaries (\b) to OP and ED to prevent matching strings like "Modified" or "Styled".
-$script:RegexSign = "Sign|Song|Lyric|Opening|Ending|\bOP\b|\bED\b|Partial|Forced|Translation|ASSR|S&S|S\s&\sS|Dubtitle"
+$script:RegexSign = "Sign|Song|Lyric|Opening|Ending|\bOP\b|\bED\b|Partial|Forced|Translation|ASSR|S&S|S\s&\sS"
+$script:RegexDub  = "(?i)dubtitles?"
 
 # [2026.06.13] Centralized Honorifics & Sanitizer
 $script:RegexHon = "(?<!\b(?:no|non|without|removed)[-\s(]*)(?:honorific|honor)"
-$script:RegexSanitizer = "(?i)\b(full|dialogue|dialog|honorifics?|honor|signs|songs|english|eng|subs|subtitles|main|lyrics|translated|translation|with|without)\b"
+$script:RegexSanitizer = "(?i)\b(full|dialogue|dialog|honorifics?|honor|signs?|songs?|english|eng|subs|subtitles|main|lyrics|translated|translation|with|without|dubtitles?|for\s+dub|sdh|hi|cc)\b"
 
 # 2. APPLY OVERRIDES FROM COMMAND LINE
 # Ensure the Video object exists in the defaults
@@ -2189,7 +2223,7 @@ if ($fast) {
 $sessionProgressIndex = 0
 if ($NoHwVideoSearch) {
     # Initialize log with placeholder to ensure the file exists for appending
-    @("--- SCAN IN PROGRESS ---", "Results will be finalized at the end of the session.", "") | Out-File -LiteralPath $noHwLog -Encoding utf8
+    @("--- SCAN IN PROGRESS ---", "Results will be finalized at the end of the session.", "") | Out-File -LiteralPath $noHwLog -Encoding utf8BOM
 }
 
 foreach ($folderPath in $targetFolders) {
@@ -2227,7 +2261,7 @@ foreach ($folderPath in $targetFolders) {
         $skipOutput.Add("") # Blank line after
         $skipOutput.Add("") # Blank line after
         
-        $skipOutput | Out-File $detailLog -Append -Encoding utf8
+        $skipOutput | Out-File $detailLog -Append -Encoding utf8BOM
         
         continue
     }
@@ -2415,7 +2449,7 @@ foreach ($folderPath in $targetFolders) {
             }
             
             # 2. Log path to file
-            $f.FullName | Out-File $pathLog -Append -Encoding utf8
+            $f.FullName | Out-File $pathLog -Append -Encoding utf8BOM
             
             # 3. Retrieve pre-probed data instantly from memory
             $cached = $probeMap[$f.FullName]
@@ -2479,7 +2513,7 @@ foreach ($folderPath in $targetFolders) {
         # Print folder header to mismatch log if needed
         if ($mismatches -gt 0) {
             $spacer = if (Test-Path $missLog) { "`r`n" } else { "" }
-            "${spacer}Folder: $($folder.FullName)" | Out-File $missLog -Append -Encoding utf8
+            "${spacer}Folder: $($folder.FullName)" | Out-File $missLog -Append -Encoding utf8BOM
         }
 
         # --- PROCESS GROUPS ---
@@ -2620,12 +2654,12 @@ foreach ($folderPath in $targetFolders) {
             }
 
             # --- APPEND TO MASTER LOG ---
-            $entry | Out-File $detailLog -Append -Encoding utf8
+            $entry | Out-File $detailLog -Append -Encoding utf8BOM
             
             # --- APPEND TO MISMATCH LOG (ONLY IF NOT PRIMARY) ---
             # If the folder has ANY mismatches, include EVERY group (Primary + Mismatches)
             if ($mismatches -gt 0) {
-                $entry | Out-File $missLog -Append -Encoding utf8
+                $entry | Out-File $missLog -Append -Encoding utf8BOM
             }
         } # <--- END GROUPS LOOP
 
@@ -2691,22 +2725,13 @@ foreach ($folderPath in $targetFolders) {
                             Write-Host "  [DevDebug-DSA] Header Probe Bypassed: Text extraction required for Language Detection (-NLD is not active)." -ForegroundColor DarkCyan
                         }
 
-                        if ($allSubs.Count -eq 2 -and -not $dsaDebugEx -and -not $skipHeaderForLngDetect) {
-                            $h1 = if ($allSubs[0].properties.tag_number_of_frames) { [int64]$allSubs[0].properties.tag_number_of_frames } 
-                                  elseif ($allSubs[0].properties.statistics_tags.NUMBER_OF_FRAMES) { [int64]$allSubs[0].properties.statistics_tags.NUMBER_OF_FRAMES } else { 0 }
-                            $h2 = if ($allSubs[1].properties.tag_number_of_frames) { [int64]$allSubs[1].properties.tag_number_of_frames } 
-                                  elseif ($allSubs[1].properties.statistics_tags.NUMBER_OF_FRAMES) { [int64]$allSubs[1].properties.statistics_tags.NUMBER_OF_FRAMES } else { 0 }
-                            
-                            $isDualEngHeader = ($allSubs[0].properties.language -eq "eng" -and $allSubs[1].properties.language -eq "eng")
-
-                            if ($h1 -gt 0 -and $h2 -gt 0 -and $isDualEngHeader) {
-                                $hRatio = [Math]::Max($h1, $h2) / [Math]::Max(1, [Math]::Min($h1, $h2))
-                                if ($hRatio -ge $targetRatio) {
-                                    $weights[$allSubs[0].id] = $h1
-                                    $weights[$allSubs[1].id] = $h2
-                                    $isResolved = $true
-                                }
+                        if (-not $dsaDebugEx -and -not $skipHeaderForLngDetect) {
+                            foreach ($sub in $allSubs) {
+                                $frames = if ($sub.properties.tag_number_of_frames) { [int64]$sub.properties.tag_number_of_frames } 
+                                          elseif ($sub.properties.statistics_tags.NUMBER_OF_FRAMES) { [int64]$sub.properties.statistics_tags.NUMBER_OF_FRAMES } else { 0 }
+                                if ($frames -gt 0) { $weights[$sub.id] = $frames }
                             }
+                            # Verification of Resolution happens later in the Decision Engine
                         }
 
                         # [Stage 2.2] Subtitle Extraction Phase (Slow Path)
@@ -2719,11 +2744,8 @@ foreach ($folderPath in $targetFolders) {
                             $extractArgs = New-Object System.Collections.Generic.List[string]
                             $probeMap = @{}
                             foreach ($sub in $allSubs) {
-                                $isImageSub = ($sub.codec -match "PGS|VobSub")
-                                if ($isImageSub -and $allSubs.Count -gt 2) {
-                                    if ($devDebugActive) { Write-Host "  [DevDebug-DSA] Skip Extraction: ID:$($sub.id) is Picture Sub and file has >2 tracks." -ForegroundColor DarkGray }
-                                    continue 
-                                }
+                                $isImg = ($sub.codec -match "PGS|VobSub")
+                                # Extraction is required even for lone tracks to verify Dialogue vs. Signs density
                                 
                                 $ext = &$getExtSb -Codec $sub.codec
                                 $tmpPath = Join-Path $tempDir "track$($sub.id + 1).$ext"
@@ -2768,9 +2790,13 @@ foreach ($folderPath in $targetFolders) {
                                             $detectedParts = $rawDetected.Split(':')
                                             $detected = $detectedParts[0]
                                             $honCount = [int]$detectedParts[1]
+                                            $theCount = [int]$detectedParts[2]
 
                                             if ($honCount -gt 0) {
                                                 $sub | Add-Member -NotePropertyName "DSA_HonCount" -NotePropertyValue $honCount -Force
+                                            }
+                                            if ($theCount -ge 0) {
+                                                $sub | Add-Member -NotePropertyName "DSA_LinguisticDensity" -NotePropertyValue $theCount -Force
                                             }
                                             $detectedLangs[$sub.id] = $detected
                                         }
@@ -2779,45 +2805,78 @@ foreach ($folderPath in $targetFolders) {
                                         $weights[$sub.id] = (Get-Item -LiteralPath $probeFile).Length
                                     }
                                 }
-                            }
+                        }
 
-                            # Compute and validate final sizing ratio
-                            if ($allSubs.Count -eq 2) {
-                                $id1 = $allSubs[0].id; $id2 = $allSubs[1].id
-                                $w1 = $weights[$id1]; $w2 = $weights[$id2]
-                                $bRatio = if ($w1 -gt 0 -or $w2 -gt 0) { [Math]::Max($w1, $w2) / [Math]::Max(1, [Math]::Min($w1, $w2)) } else { 0 }
-                                $minReq = if ($allSubs[0].codec -match "s_text|utf8|srt|ass|ssa|substationalpha|subrip") { 2.0 } else { 3.0 }
-                                if ($bRatio -ge $minReq) {
-                                    if ($devDebugActive) {
-                                        Write-Host "  [DevDebug-DSA] Bitstream/Text Probe SUCCESS (Ratio: $($bRatio.ToString('F2')))" -ForegroundColor Green
+                        if ($devDebugActive) {
+                            # Log Resolution SUCCESS (if applicable) for the log stream
+                            $pairs = $allSubs | Group-Object { 
+                                $isText = $_.codec -match "s_text|utf8|srt|ass|ssa|substationalpha|subrip"
+                                $family = if ($isText) { "TEXT" } else { $_.codec }
+                                $effL = if ($detectedLangs.ContainsKey($_.id) -and $detectedLangs[$_.id] -ne "und") { $detectedLangs[$_.id] } else { $_.properties.language }
+                                "$family|$effL"
+                            }
+                            foreach ($grp in $pairs) {
+                                if ($grp.Count -eq 2) {
+                                    $w1 = $weights[$grp.Group[0].id]; $w2 = $weights[$grp.Group[1].id]
+                                    if ($w1 -gt 0 -or $w2 -gt 0) {
+                                        $ratio = [Math]::Max($w1, $w2) / [Math]::Max(1, [Math]::Min($w1, $w2))
+                                        $minReq = if ($grp.Group[0].codec -match "s_text|utf8|srt|ass|ssa|substationalpha|subrip") { 2.0 } else { 3.0 }
+                                        if ($ratio -ge $minReq) { Write-Host "[DevDebug-DSA] Bitstream/Text Probe SUCCESS (Ratio: $($ratio.ToString('F2')))" -ForegroundColor Green }
+                                        else { Write-Host "    [DevDebug-DSA] Ratio too low for subgroup resolution ($($ratio.ToString('F2')) < $minReq)" -ForegroundColor DarkGray }
                                     }
-                                    $isResolved = $true
-                                } else {
-                                    if ($devDebugActive) {
-                                        Write-Host "  [DevDebug-DSA] Full Dialogue vs. Signs & Songs: Ratio too low ($($bRatio.ToString('F2'))). Skipping Naming logic." -ForegroundColor DarkGray
-                                    }
+                                } elseif ($grp.Count -gt 2) {
+                                    Write-Host "[DevDebug-DSA] Bitstream/Text Probe SUCCESS (Multi-Track Outlier Detection)" -ForegroundColor Green
                                 }
                             }
-
-                            if ($devDebugActive) {
-                                $subIdx = 1
-                                foreach ($sub in $allSubs) {
-                                    $sSel = "s$subIdx"
+                            foreach ($sub in $allSubs) {
+                                if ($weights.ContainsKey($sub.id)) {
+                                    $sIdx = [array]::IndexOf($allSubs, $sub) + 1
                                     $kb = [Math]::Round($weights[$sub.id] / 1024, 3)
-                                    Write-Host "    [DevDebug-DSA] Final Weight ID:$($sub.id) - Track $($sub.id + 1) - [$sSel]...($kb KB)" -ForegroundColor Gray
-                                    $subIdx++
+                                    Write-Host "    [DevDebug-DSA] Final Weight ID:$($sub.id) - Track $($sub.id + 1) - [s$sIdx]...($kb KB)" -ForegroundColor Gray
                                 }
-                                Write-Host "    [DevDebug-DSA] Preservation Active: Files kept at -> $tempDir" -ForegroundColor DarkCyan
-                            
+                            }
+                            Write-Host "    [DevDebug-DSA] Preservation Active: Files kept at -> $tempDir" -ForegroundColor DarkCyan
+                            foreach ($sub in $allSubs) {
+                                Write-Host "  [DevDebug-DSA] Found Track:$($sub.id + 1) Name: $($sub.properties.track_name)" -ForegroundColor Gray
                             }
                         }
 
-                        $dsaResult = [PSCustomObject]@{
-                            Weights       = $weights
-                            DetectedLangs = $detectedLangs
-                            IsResolved    = $isResolved
-                            Logs          = @($script:LocalLogsList)
+                        # Compute and validate final sizing ratio
+                            # Subgroup Resolution Logic: Check for any pairs that meet the threshold
+                            $pairs = $allSubs | Group-Object { 
+                                $isText = $_.codec -match "s_text|utf8|srt|ass|ssa|substationalpha|subrip"
+                                $family = if ($isText) { "TEXT" } else { $_.codec }
+                                # Group by detected language to allow und/spa pairing
+                                $effL = if ($detectedLangs.ContainsKey($_.id) -and $detectedLangs[$_.id] -ne "und") { $detectedLangs[$_.id] } else { $_.properties.language }
+                                "$family|$effL"
+                            }
+                            foreach ($grp in $pairs) {
+                                if ($grp.Count -eq 2) {
+                                    $t1 = $grp.Group[0]; $t2 = $grp.Group[1]
+                                    $w1 = $weights[$t1.id]; $w2 = $weights[$t2.id]
+                                    if ($w1 -gt 0 -or $w2 -gt 0) {
+                                        $ratio = [Math]::Max($w1, $w2) / [Math]::Max(1, [Math]::Min($w1, $w2))
+                                        $minReq = if ($t1.codec -match "s_text|utf8|srt|ass|ssa|substationalpha|subrip") { 2.0 } else { 3.0 }
+                                        if ($ratio -ge $minReq) { $isResolved = $true }
+                                    }
+                                } elseif ($grp.Count -gt 2) {
+                                    $isResolved = $true
+                                }
+                            }
                         }
+                    }
+                # Capture linguistic density weights for commentary disqualification
+                    $lingWeights = @{}
+                    foreach($sub in $allSubs) { 
+                        if ($sub.PSObject.Properties['DSA_LinguisticDensity']) { $lingWeights[$sub.id] = $sub.DSA_LinguisticDensity }
+                    }
+
+                    $dsaResult = [PSCustomObject]@{
+                        Weights           = $weights
+                        DetectedLangs     = $detectedLangs
+                        LinguisticWeights = $lingWeights
+                        IsResolved        = $isResolved
+                        Logs              = @($script:LocalLogsList)
                     }
                 }
 
@@ -2847,25 +2906,27 @@ foreach ($folderPath in $targetFolders) {
             # [FIX] v2026.06.02 - Restore original file state to shared memory using direct assignment
             $fileGuid = "DSA_" + $fToFix.Name.GetHashCode().ToString('X')
             $dsaCtx = $currentGroup.PSObject.Properties[$fileGuid].Value
+            
+            # [FIX] Slates-Clean Revert: Revert names BEFORE the track loop begins so DSA discoveries are preserved for Fixer evaluation.
+            if ($null -ne $dsaCtx) {
+                foreach ($track in $fToFix.PristineJson.tracks) {
+                    if ($dsaCtx.OriginalNames.ContainsKey($track.id)) {
+                        $orig = $dsaCtx.OriginalNames[$track.id]
+                        $track.properties.track_name = if ($orig -eq "[None]") { "" } else { $orig }
+                    }
+                    if ($dsaCtx.OriginalLangs.ContainsKey($track.id)) {
+                        $track.properties.language = $dsaCtx.OriginalLangs[$track.id]
+                    }
+                }
+            }
 
             foreach ($track in $fToFix.PristineJson.tracks) {
                 # Clean up temporary DSA flags
                 $track.PSObject.Properties.Remove("DSA_DetectedLang")
-                    if ($track.properties.PSObject.Properties["DSA_Handled"]) { 
-                        $track.properties.PSObject.Properties.Remove("DSA_Handled") 
-                    }
-                    
-                    # Revert track name and language to original values from disk before evaluation
-                    if ($null -ne $dsaCtx) {
-                        if ($dsaCtx.OriginalNames.ContainsKey($track.id)) {
-                            $orig = $dsaCtx.OriginalNames[$track.id]
-                            $track.properties.track_name = if ($orig -eq "[None]") { "" } else { $orig }
-                        }
-                        if ($dsaCtx.OriginalLangs.ContainsKey($track.id)) {
-                            $track.properties.language = $dsaCtx.OriginalLangs[$track.id]
-                        }
-                    }
+                if ($track.properties.PSObject.Properties["DSA_Handled"]) { 
+                    $track.properties.PSObject.Properties.Remove("DSA_Handled") 
                 }
+            }
 
                 # 1. Initialize the list FIRST so we can log skips to it
                 $fixDetails = New-Object System.Collections.Generic.List[string]
@@ -2888,7 +2949,7 @@ foreach ($folderPath in $targetFolders) {
                     [void]$fixDetails.Add("FILE: $($fToFix.FullName)")
                     [void]$fixDetails.Add("  [!] SKIPPING FILE: Multiple video tracks detected ($videoCount).")
                     [void]$fixDetails.Add("") # Add spacing
-                    $fixDetails | Out-File $fixerLog -Append -Encoding utf8
+                    $fixDetails | Out-File $fixerLog -Append -Encoding utf8BOM
                     continue 
                 }
 
@@ -2999,7 +3060,7 @@ foreach ($folderPath in $targetFolders) {
                                     if ($DeepSubtitleAuditLanguageDetectionLimit2 -and $allSubs.Count -gt 2) {
                                         if ($DevDebug) { Write-Host "  [DevDebug-DSA] Skipping: File has $($allSubs.Count) tracks (-LDL2 active)" -ForegroundColor DarkGray }
                                         $currentGroup | Add-Member -MemberType NoteProperty -Name $fileGuid -Value $null -Force
-                                        continue 
+                                         
                                     }
                                     if ($DevDebug) { Write-Host "  [DevDebug-DSA] Discovery: File accepted for Language Probe (Count: $($allSubs.Count))" -ForegroundColor Cyan }
 
@@ -3010,7 +3071,7 @@ foreach ($folderPath in $targetFolders) {
                                         $origLangs[$sub.id] = $sub.properties.language
                                     }
 
-                                    $currentGroup | Add-Member -MemberType NoteProperty -Name $fileGuid -Value @{ "Tracks" = $allSubs; "Weights" = @{}; "OriginalNames" = $origNames; "OriginalLangs" = $origLangs } -Force
+                                    $currentGroup | Add-Member -MemberType NoteProperty -Name $fileGuid -Value @{ "Tracks" = $allSubs; "Weights" = @{}; "LinguisticWeights" = @{}; "OriginalNames" = $origNames; "OriginalLangs" = $origLangs; "IsResolved" = $false } -Force
                                 } else {
                                     if ($DevDebug -and $isLdl2Restricted) { Write-Host "  [DevDebug-DSA] Skipping: File has $($allSubs.Count) tracks (Limit2 is Active)" -ForegroundColor DarkGray }
                                     elseif ($DevDebug) { Write-Host "  [DevDebug-DSA] Skipping: File does not contain subtitle tracks." -ForegroundColor DarkGray }
@@ -3022,14 +3083,31 @@ foreach ($folderPath in $targetFolders) {
                             if ($null -ne $dsaCtx) {
                                 $ambiguousTracks = $dsaCtx.Tracks
 
+                                # Context Discovery: Check for global commentary environment
+                                $isGlobalCommentaryEnv = $false
+                                $auds = @($fToFix.PristineJson.tracks | Where-Object { $_.type -eq "audio" })
+                                foreach ($aud in $auds) {
+                                    if ($aud.properties.track_name -match "Commentary|Interview" -or $aud.properties.flag_commentary) {
+                                        $isGlobalCommentaryEnv = $true; break
+                                    }
+                                }
+                                # Secondary check: Multi-audio in primary languages
+                                if (-not $isGlobalCommentaryEnv) {
+                                    $audLangs = $auds | Group-Object { $_.properties.language }
+                                    if ($audLangs | Where-Object { $_.Count -gt 1 -and $_.Name -match "jpn|eng|und" }) { 
+                                        $isGlobalCommentaryEnv = $true 
+                                        if ($DevDebug) { Write-Host "    [DevDebug-DSA] Commentary Env Detected: Multiple audio tracks found for language: $($_.Name)" -ForegroundColor DarkCyan }
+                                    }
+                                }
+
                                 # --- STAGE 2: PROBING PHASE (Weights and Language Detection) ---
                                 if ($dsaCtx.Weights.Count -eq 0) {
                                     $preCalculated = if ($null -ne $dsaLookupMap) { $dsaLookupMap[$fToFix.FullName] } else { $null }
                                     if ($null -ne $preCalculated) {
                                         # Use pre-calculated weights directly
-                                        foreach ($key in $preCalculated.Weights.Keys) {
-                                            $dsaCtx.Weights[$key] = $preCalculated.Weights[$key]
-                                        }
+                                        foreach ($key in $preCalculated.Weights.Keys) { $dsaCtx.Weights[$key] = $preCalculated.Weights[$key] }
+                                        foreach ($key in $preCalculated.LinguisticWeights.Keys) { $dsaCtx.LinguisticWeights[$key] = $preCalculated.LinguisticWeights[$key] }
+                                        $dsaCtx.IsResolved = $preCalculated.IsResolved
 
                                         # Chronologically play back all captured background logs
                                         if ($DevDebug -and $preCalculated.Logs) {
@@ -3048,7 +3126,7 @@ foreach ($folderPath in $targetFolders) {
 
                                                 # [FIX] Oscillation Prevention: Treat 'eng' and 'enm' as equivalent matches.
                                                 $isEngEnmEquivalent = ($sub.properties.language -match "eng|enm" -and $detected -match "eng|enm")
-                                                
+                                                                
                                                 # [FIX] Convergence: Only fix header if not equivalent (prevents eng <-> enm loops)
                                                 if (-not $isEngEnmEquivalent -and $sub.properties.language -ne $detected) {
                                                     $writeLang = if ($detected -eq "enm") { "eng" } else { $detected }
@@ -3126,16 +3204,8 @@ foreach ($folderPath in $targetFolders) {
                                             $extractArgs = New-Object System.Collections.Generic.List[string]
                                             $probeMap = @{}
                                             foreach ($sub in $ambiguousTracks) {
-                                                
                                                 $isImageSub = ($sub.codec -match "PGS|VobSub")
-                                                
-                                                # OPTIMIZATION: Skip extraction of picture subs if there are 3+ tracks.
-                                                # Density/Ratio checks only apply to 1 or 2 track scenarios.
-                                                if ($isImageSub -and $ambiguousTracks.Count -gt 2) {
-                                                    if ($DevDebug) { Write-Host "  [DevDebug-DSA] Skip Extraction: ID:$($sub.id) is Picture Sub and file has >2 tracks." -ForegroundColor DarkGray }
-                                                    continue
-                                                }
-                                                
+                                                # Extraction enabled for all track types to support deep subgroup pairing
                                                 $ext = Get-SubtitleExtension -Codec $sub.codec
                                                 $tmpPath = Join-Path $tempDir "track$($sub.id + 1).$ext"
                                                 $extractArgs.Add("$($sub.id):$tmpPath")
@@ -3149,15 +3219,14 @@ foreach ($folderPath in $targetFolders) {
                                                 $probeFile = $probeMap[$sub.id]
                                                 if ($null -ne $probeFile -and (Test-Path -LiteralPath $probeFile)) {
                                                     $isImageSub = ($sub.codec -match "PGS|VobSub")
-                                                    
                                                     if (-not $isImageSub) {
                                                         $maxNeeded = [int]::MaxValue
-                                                            if ($ambiguousTracks.Count -eq 1) {
-                                                                $maxNeeded = if ($DeepSubtitleAuditNOLanguageDetection) { 1500 } else { 15000 }
-                                                            } elseif ($ambiguousTracks.Count -gt 2) {
-                                                                $maxNeeded = 15000
-                                                            }
-                                                            $cleanText = Extract-DialogueText -Path $probeFile -OutPath (Join-Path $tempDir "track$($sub.id + 1)_cleaned.txt") -DevDebug:$DevDebug -MaxLength $maxNeeded
+                                                        if ($ambiguousTracks.Count -eq 1) {
+                                                            $maxNeeded = if ($DeepSubtitleAuditNOLanguageDetection) { 1500 } else { 15000 }
+                                                        } elseif ($ambiguousTracks.Count -gt 2) {
+                                                            $maxNeeded = 15000
+                                                        }
+                                                        $cleanText = Extract-DialogueText -Path $probeFile -OutPath (Join-Path $tempDir "track$($sub.id + 1)_cleaned.txt") -DevDebug:$DevDebug -MaxLength $maxNeeded
                                                         
                                                         # Language Detection
                                                         if (-not $DeepSubtitleAuditNOLanguageDetection) {
@@ -3168,19 +3237,23 @@ foreach ($folderPath in $targetFolders) {
 
                                                             $sampleText = if ($cleanText.Length -gt 15000) { $cleanText.Substring(0, 15000) } else { $cleanText }
                                                             $rawDetected = Detect-SubtitleLanguage -Text $sampleText `
-                                                                                                    -CurrentLang $sub.properties.language `
-                                                                                                    -Honorifics:$Honorifics `
-                                                                                                    -DevDebug:$DevDebug `
-                                                                                                    -TrackID $sub.id `
-                                                                                                    -Selector $tmpSel `
-                                                                                                    -TrackName $sub.properties.track_name
+                                                                                                   -CurrentLang $sub.properties.language `
+                                                                                                   -Honorifics:$Honorifics `
+                                                                                                   -DevDebug:$DevDebug `
+                                                                                                   -TrackID $sub.id `
+                                                                                                   -Selector $tmpSel `
+                                                                                                   -TrackName $sub.properties.track_name
                                                             
                                                             $detectedParts = $rawDetected.Split(':')
                                                             $detected = $detectedParts[0]
                                                             $honCount = [int]$detectedParts[1]
+                                                            $theCount = [int]$detectedParts[2]
 
                                                             if ($honCount -gt 0) {
                                                                 $sub | Add-Member -NotePropertyName "DSA_HonCount" -NotePropertyValue $honCount -Force
+                                                            }
+                                                            if ($theCount -ge 0) {
+                                                                $dsaCtx.LinguisticWeights[$sub.id] = $theCount
                                                             }
 
                                                             # [FIX] Oscillation Prevention: Treat 'eng' and 'enm' as equivalent matches.
@@ -3198,6 +3271,7 @@ foreach ($folderPath in $targetFolders) {
                                                                 # FORCE WRITE: Add to Params immediately to ensure disk update
                                                                 if ($Fix) { $Params += @('--edit', "track:$($sub.id + 1)", '--set', "language=$writeLang") }
                                                                 $sub.properties.language = $detected
+                                                                $needsChange = $true
                                                             }
                                                         }
                                                         $dsaCtx.Weights[$sub.id] = $cleanText.Length
@@ -3210,6 +3284,26 @@ foreach ($folderPath in $targetFolders) {
 
                                             # Cleanup artifacts
                                             if ($DevDebug) {
+                                                # Calculate and print SUCCESS line first
+                                                $pairs = $ambiguousTracks | Group-Object { 
+                                                    $isText = $_.codec -match "s_text|utf8|srt|ass|ssa|substationalpha|subrip"
+                                                    $family = if ($isText) { "TEXT" } else { $_.codec }
+                                                    $effL = if ($_.DSA_DetectedLang -and $_.DSA_DetectedLang -ne "und") { $_.DSA_DetectedLang } else { $_.properties.language }
+                                                    "$family|$effL"
+                                                }
+                                                foreach ($grp in $pairs) {
+                                                    if ($grp.Count -eq 2) {
+                                                        $w1 = $dsaCtx.Weights[$grp.Group[0].id]; $w2 = $dsaCtx.Weights[$grp.Group[1].id]
+                                                        if ($w1 -gt 0 -or $w2 -gt 0) {
+                                                            $ratio = [Math]::Max($w1, $w2) / [Math]::Max(1, [Math]::Min($w1, $w2))
+                                                            $minReq = if ($grp.Group[0].codec -match "s_text|utf8|srt|ass|ssa|substationalpha|subrip") { 2.0 } else { 3.0 }
+                                                            if ($ratio -ge $minReq) { Write-Host "[DevDebug-DSA] Bitstream/Text Probe SUCCESS (Ratio: $($ratio.ToString('F2')))" -ForegroundColor Green }
+                                                            else { Write-Host "    [DevDebug-DSA] Ratio too low for subgroup resolution ($($ratio.ToString('F2')) < $minReq)" -ForegroundColor DarkGray }
+                                                        }
+                                                    } elseif ($grp.Count -gt 2) {
+                                                        Write-Host "[DevDebug-DSA] Bitstream/Text Probe SUCCESS (Multi-Track Outlier Detection)" -ForegroundColor Green
+                                                    }
+                                                }
                                                 $allSubs = @($fToFix.PristineJson.tracks | Where-Object { $_.type -eq "subtitles" })
                                                 foreach ($sub in $ambiguousTracks) {
                                                     $sIdx = [array]::IndexOf($allSubs, $sub) + 1
@@ -3218,8 +3312,32 @@ foreach ($folderPath in $targetFolders) {
                                                     Write-Host "    [DevDebug-DSA] Final Weight ID:$($sub.id) - Track $($sub.id + 1) - [$sSel]...($kb KB)" -ForegroundColor Gray
                                                 }
                                                 Write-Host "    [DevDebug-DSA] Preservation Active: Files kept at -> $tempDir" -ForegroundColor DarkCyan
+                                                foreach ($sub in $ambiguousTracks) {
+                                                    Write-Host "  [DevDebug-DSA] Found Track:$($sub.id + 1) Name: $($sub.properties.track_name)" -ForegroundColor Gray
+                                                }
                                             } else {
                                                 if (Test-Path $tempDir) { Remove-Item $tempDir -Recurse -Force -ErrorAction SilentlyContinue }
+                                            }
+
+                                            # Sequential Resolution Check: Verify if any subgroups meet sizing/outlier thresholds
+                                            $pairs = $ambiguousTracks | Group-Object { 
+                                                $isText = $_.codec -match "s_text|utf8|srt|ass|ssa|substationalpha|subrip"
+                                                $family = if ($isText) { "TEXT" } else { $_.codec }
+                                                # Enable pairing for tracks with broken header tags (und/spa)
+                                                $effL = if ($_.DSA_DetectedLang -and $_.DSA_DetectedLang -ne "und") { $_.DSA_DetectedLang } else { $_.properties.language }
+                                                "$family|$effL"
+                                            }
+                                            foreach ($grp in $pairs) {
+                                                if ($grp.Count -eq 2) {
+                                                    $w1 = $dsaCtx.Weights[$grp.Group[0].id]; $w2 = $dsaCtx.Weights[$grp.Group[1].id]
+                                                    if ($w1 -gt 0 -or $w2 -gt 0) {
+                                                        $ratio = [Math]::Max($w1, $w2) / [Math]::Max(1, [Math]::Min($w1, $w2))
+                                                        $minReq = if ($grp.Group[0].codec -match "s_text|utf8|srt|ass|ssa|substationalpha|subrip") { 2.0 } else { 3.0 }
+                                                        if ($ratio -ge $minReq) { $dsaCtx.IsResolved = $true }
+                                                    }
+                                                } elseif ($grp.Count -gt 2) {
+                                                    $dsaCtx.IsResolved = $true
+                                                }
                                             }
                                         }
                                     }
@@ -3229,20 +3347,34 @@ foreach ($folderPath in $targetFolders) {
                                 
                                 # Aggressive Role Sanitization Filter
                                 $roleFilter = $script:RegexSanitizer
-                                $SanitizeName = { param($n) ($n -replace $roleFilter, ' ' -replace '[\(\)\[\]\{\}\-\.\:\&\+]', ' ').Trim() -replace '\s+', ' ' }
+                                $SanitizeName = { param($n) ($n -replace $roleFilter, ' ' -replace '[\(\)\[\]\{\}\-\.\:\&\+\/]', ' ').Trim() -replace '\s+', ' ' }
 
                                 # Phase A: Universal Honorifics & Language Normalization (ALL tracks)
                                 foreach ($tH in $ambiguousTracks) {
-                                    $isHonDet = ($tH.DSA_DetectedLang -eq "enm" -or $tH.properties.language -eq "enm" -or $tH.properties.track_name -match $script:RegexHon)
+                                    $curName = if ($tH.properties.track_name) { $tH.properties.track_name } else { "" }
+
+                                    # [FIX] Hard Bypass: Never rename tracks explicitly tagged as Dubtitles, Commentary, or CC/SDH (Name or Flag)
+                                    $isAccessibility = ($curName -match "\b(SDH|HI|CC)\b" -or $tH.properties.flag_hearing_impaired)
+                                    if ($curName -match $script:RegexDub -or $curName -match "Commentary|Interview" -or $isAccessibility) {
+                                        $tH.properties | Add-Member -NotePropertyName "DSA_Handled" -NotePropertyValue $true -Force
+                                        continue
+                                    }
+
+                                    $isHonDet = ($tH.DSA_DetectedLang -eq "enm" -or $tH.properties.language -eq "enm" -or $curName -match $script:RegexHon)
                                     if ($isHonDet) {
                                         $curName = if ($tH.properties.track_name) { $tH.properties.track_name } else { "" }
                                         
+                                        # [FIX] Do not force "Full Dialogue" role on tracks already labeled as Signs & Songs
+                                        $isSignsTrack = ($curName -match $script:RegexSign)
+
                                         # 1. Language Normalization: Force header to 'eng'
                                         if ($tH.properties.language -ne "eng") {
                                             $needsChange = $true
                                             if ($Fix) { $Params += @('--edit', "track:$($tH.id + 1)", '--set', "language=eng") }
                                             $tH.properties.language = "eng"
                                         }
+
+                                        if ($isSignsTrack) { continue }
 
                                         # 1b. Role Validation: Check if name already contains correct keywords
                                         $isCorrect = if ($tH.DSA_DetectedLang -eq "enm") { $curName -match "Honorifics" -and $curName -match "Full Dialogue" }
@@ -3257,9 +3389,10 @@ foreach ($folderPath in $targetFolders) {
 
                                         # 2. Truth-Based Naming: If bitstream proved standard English, demote 'Honorifics' liar.
                                         $cleanGroupName = &$SanitizeName $curName
-                                        $prefix = if ($tH.DSA_DetectedLang -eq "enm") { "Honorifics Full Dialogue" }
-                                                  elseif ($tH.DSA_DetectedLang -eq "eng") { "Full Dialogue" }
-                                                  else { "Honorifics Full Dialogue" } # Trust name for picture subs/skipped scans
+                                        $isComm = ($curName -match "Commentary|Interview")
+                                        $prefix = if ($tH.DSA_DetectedLang -eq "enm") { if ($isComm) { "Honorifics Commentary" } else { "Honorifics Full Dialogue" } }
+                                                  elseif ($tH.DSA_DetectedLang -eq "eng") { if ($isComm) { "Commentary" } else { "Full Dialogue" } }
+                                                  else { if ($isComm) { "Honorifics Commentary" } else { "Honorifics Full Dialogue" } } # Trust name for picture subs/skipped scans
                                         
                                         $newName = if ([string]::IsNullOrWhiteSpace($cleanGroupName)) { $prefix } else { "$prefix [$cleanGroupName]" }
                                         
@@ -3328,141 +3461,214 @@ foreach ($folderPath in $targetFolders) {
                                 }
 
                                 # --- STAGE 3: DECISION LOGIC (EXACTLY 2 TRACKS ONLY) ---
-                                if ($ambiguousTracks.Count -eq 2 -and $null -ne $currentGroup.PSObject.Properties[$fileGuid + "_Ratio"]) {
-                                    $w1 = $dsaCtx.Weights[$ambiguousTracks[0].id]
-                                    $w2 = $dsaCtx.Weights[$ambiguousTracks[1].id]
-                                    
-                                    # [FIX] Gate changed to -or to allow naming logic when one track is filtered to 0
-                                    if ($w1 -gt 0 -or $w2 -gt 0) {
-                                        # [FIX] Added Max(1, ...) safety wrapper to prevent DivideByZero when one weight is 0
-                                        $ratio = [Math]::Max($w1, $w2) / [Math]::Max(1, [Math]::Min($w1, $w2))
-                                        $dynRatio = $currentGroup.PSObject.Properties[$fileGuid + "_Ratio"].Value
-                                        
-                                        $largeTrack = if ($w1 -gt $w2) { $ambiguousTracks[0] } else { $ambiguousTracks[1] }
-                                        $smallTrack = if ($w1 -gt $w2) { $ambiguousTracks[1] } else { $ambiguousTracks[0] }
-                                        
-                                        $nameL = if ($largeTrack.properties.track_name) { $largeTrack.properties.track_name } else { "" }
-                                        $nameS = if ($smallTrack.properties.track_name) { $smallTrack.properties.track_name } else { "" }
-                                        
-                                        # [FIX] Determine EFFECTIVE language for truth check (Detected or Header)
-                                        $effL0 = if ($ambiguousTracks[0].DSA_DetectedLang) { $ambiguousTracks[0].DSA_DetectedLang } else { $ambiguousTracks[0].properties.language }
-                                        $effL1 = if ($ambiguousTracks[1].DSA_DetectedLang) { $ambiguousTracks[1].DSA_DetectedLang } else { $ambiguousTracks[1].properties.language }
-                                        $isDualEng = ($effL0 -match "eng|enm" -and $effL1 -match "eng|enm")
-                                        
-                                        if ($ratio -ge $dynRatio -and $isDualEng) {
-                                            # Aggressive Role Filtering
-                                            $roleFilter = $script:RegexSanitizer
-
-                                            # Check handled status (Phase A)
-                                            $handledL = $largeTrack.properties.DSA_Handled
-                                            $handledS = $smallTrack.properties.DSA_Handled
-
-                                            $hasDiagL = ($nameL -match $script:RegexDiag) -or $handledL
-                                            $hasSignL = ($nameL -match $script:RegexSign)
-                                            $hasDiagS = $nameS -match $script:RegexDiag
-                                            $hasSignS = $nameS -match $script:RegexSign
+                                if ($ambiguousTracks.Count -ge 2 -and $dsaCtx.IsResolved) {
+                                    $subPairs = $ambiguousTracks | Group-Object { 
+                                        $isText = $_.codec -match "s_text|utf8|srt|ass|ssa|substationalpha|subrip"
+                                        $family = if ($isText) { "TEXT" } else { $_.codec }
+                                        # Use detected language to correctly pair tracks with broken header tags
+                                        $effL = if ($_.DSA_DetectedLang -and $_.DSA_DetectedLang -ne "und") { $_.DSA_DetectedLang } else { $_.properties.language }
+                                        "$family|$effL"
+                                    }
+                                    foreach ($grp in $subPairs) {
+                                        if ($grp.Count -eq 2) {
+                                            $t1 = $grp.Group[0]; $t2 = $grp.Group[1]
+                                            # Use ID-based weight lookup to bypass header language mismatches
+                                            $w1 = if ($dsaCtx.Weights.ContainsKey($t1.id)) { $dsaCtx.Weights[$t1.id] } else { 0 }
+                                            $w2 = if ($dsaCtx.Weights.ContainsKey($t2.id)) { $dsaCtx.Weights[$t2.id] } else { 0 }
                                             
-                                            # Check if name is missing "Honorific" despite detection
-                                            $isHonDet = ($largeTrack.DSA_DetectedLang -eq "enm" -or $largeTrack.properties.language -eq "enm")
-                                            $isNameMissingHon = ($isHonDet -and $nameL -notmatch "(?i)honorific|honor")
-                                            
-                                            $actionMsg = ""
-
-                                            # [Condition 3.1] SWAP REQUIRED
-                                            if (($nameL -match $script:RegexSign) -and ($nameS -match $script:RegexDiag)) {
-                                                $needsChange = $true
-                                                $largeTrack.properties | Add-Member -NotePropertyName "DSA_Handled" -NotePropertyValue $true -Force
-                                                $smallTrack.properties | Add-Member -NotePropertyName "DSA_Handled" -NotePropertyValue $true -Force
-
-                                                # Standardize Names during swap
-                                                $groupL = &$SanitizeName $nameS
-                                                $groupS = &$SanitizeName $nameL
+                                            if ($w1 -gt 0 -or $w2 -gt 0) {
+                                                $ratio = [Math]::Max($w1, $w2) / [Math]::Max(1, [Math]::Min($w1, $w2))
+                                                $minReq = if ($t1.codec -match "s_text|utf8|srt|ass|ssa|substationalpha|subrip") { 2.0 } else { 3.0 }
                                                 
-                                                $isHonL = ($largeTrack.DSA_DetectedLang -eq "enm" -or $largeTrack.properties.language -eq "enm" -or $nameS -match "Honorifics")
-                                                $roleL = if ($isHonL) { "Honorifics Full Dialogue" } else { "Full Dialogue" }
+                                                $largeTrack = if ($w1 -gt $w2) { $t1 } else { $t2 }
+                                                $smallTrack = if ($w1 -gt $w2) { $t2 } else { $t1 }
                                                 
-                                                $nameS = if ([string]::IsNullOrWhiteSpace($roleL)) { "Full Dialogue" } else { if ([string]::IsNullOrWhiteSpace($groupL)) { $roleL } else { "$roleL [$groupL]" } }
-                                                $nameL = if ([string]::IsNullOrWhiteSpace($groupS)) { "Signs & Songs" } else { "Signs & Songs [$groupS]" }
-                                                if ($Fix) {
-                                                    if ($nameS -ne $nameL) {
-                                                        $Params += @('--edit', "track:$($largeTrack.id + 1)", '--set', "name=$nameS")
-                                                        $Params += @('--edit', "track:$($smallTrack.id + 1)", '--set', "name=$nameL")
+                                                $nameL = if ($largeTrack.properties.track_name) { $largeTrack.properties.track_name } else { "" }
+                                                $nameS = if ($smallTrack.properties.track_name) { $smallTrack.properties.track_name } else { "" }
+                                                
+                                                $effL1 = if ($t1.DSA_DetectedLang) { $t1.DSA_DetectedLang } else { $t1.properties.language }
+                                                $effL2 = if ($t2.DSA_DetectedLang) { $t2.DSA_DetectedLang } else { $t2.properties.language }
+                                                $isDualEng = ($effL1 -match "eng|enm" -and $effL2 -match "eng|enm")
+                                                
+                                                if ($ratio -ge $minReq -and $isDualEng) {
+                                                    $actionMsg = ""
+                                                    # [FIX] Pairing Bypass: Skip renaming if either track is a Dubtitle, Commentary, or CC/SDH (Name or Flag)
+                                                    $isAccL = ($nameL -match "\b(SDH|HI|CC)\b" -or $largeTrack.properties.flag_hearing_impaired)
+                                                    $isAccS = ($nameS -match "\b(SDH|HI|CC)\b" -or $smallTrack.properties.flag_hearing_impaired)
+                                                    if ($nameL -match $script:RegexDub -or $nameS -match $script:RegexDub -or $isAccL -or $isAccS -or $nameL -match "Commentary|Interview" -or $nameS -match "Commentary|Interview") {
+                                                        $largeTrack.properties | Add-Member -NotePropertyName "DSA_Handled" -NotePropertyValue $true -Force
+                                                        $smallTrack.properties | Add-Member -NotePropertyName "DSA_Handled" -NotePropertyValue $true -Force
+                                                        continue
                                                     }
-                                                }
-                                                $largeTrack.properties | Add-Member -NotePropertyName "track_name" -NotePropertyValue $nameS -Force
-                                                $smallTrack.properties | Add-Member -NotePropertyName "track_name" -NotePropertyValue $nameL -Force
-                                                $actionMsg = "[DSA] SWAP: Swapping '$nameS' to Large and '$nameL' to Small"
-                                            }
-                                            # [Condition 3.2] FIX GARBAGE/MISSING/HONORIFICS
-                                            elseif (-not $hasDiagL -or -not $hasSignS -or ($nameL -match "English Subtitles") -or $isNameMissingHon) {
-                                                
-                                                # Dialogue Track (Large)
-                                                $isHonL = ($largeTrack.DSA_DetectedLang -eq "enm" -or $largeTrack.properties.language -eq "enm" -or $nameL -match "Honorifics")
-                                                $isCorrectL = if ($isHonL) { $nameL -match "Honorifics" -and $nameL -match "Full Dialogue" }
-                                                              else { $nameL -match "Full Dialogue" -and $nameL -notmatch "Honorifics" }
+                                                    $handledL = $largeTrack.properties.DSA_Handled
+                                                    $handledS = $smallTrack.properties.DSA_Handled
 
-                                                if (-not $handledL -and -not $isCorrectL) {
-                                                    $groupL = &$SanitizeName $nameL
-                                                    $roleL = if ($isHonL) { "Honorifics Full Dialogue" } else { "Full Dialogue" }
-                                                    $newNameL = if ([string]::IsNullOrWhiteSpace($groupL)) { $roleL } else { "$roleL [$groupL]" }
+                                                    $hasDiagL = ($nameL -match $script:RegexDiag) -or $handledL
+                                                    $hasSignL = ($nameL -match $script:RegexSign)
+                                                    $hasDiagS = $nameS -match $script:RegexDiag
+                                                    $hasSignS = $nameS -match $script:RegexSign
                                                     
-                                                    if ($newNameL -ne $nameL) {
+                                                    $isHonDet = ($largeTrack.DSA_DetectedLang -eq "enm" -or $largeTrack.properties.language -eq "enm")
+                                                    $isNameMissingHon = ($isHonDet -and $nameL -notmatch "(?i)honorific|honor")
+
+                                                    if (($nameL -match $script:RegexSign) -and ($nameS -match $script:RegexDiag)) {
                                                         $needsChange = $true
+                                                        $cleanL = &$SanitizeName $nameS; $cleanS = &$SanitizeName $nameL
+                                                        $isHonL = ($largeTrack.DSA_DetectedLang -eq "enm" -or $largeTrack.properties.language -eq "enm" -or $nameS -match "Honorifics")
+                                                        $roleL = if ($isHonL) { "Honorifics Full Dialogue" } else { "Full Dialogue" }
+                                                        $newNameL = if ([string]::IsNullOrWhiteSpace($cleanL)) { $roleL } else { "$roleL [$cleanL]" }
+                                                        $newNameS = if ([string]::IsNullOrWhiteSpace($cleanS)) { "Signs & Songs" } else { "Signs & Songs [$cleanS]" }
+                                                        
                                                         if ($Fix) {
+                                                            $Params += @('--edit', "track:$($largeTrack.id + 1)", '--set', "name=$newNameL")
+                                                            $Params += @('--edit', "track:$($smallTrack.id + 1)", '--set', "name=$newNameS")
+                                                        }
+                                                        $largeTrack.properties | Add-Member -NotePropertyName "track_name" -NotePropertyValue $newNameL -Force
+                                                        $smallTrack.properties | Add-Member -NotePropertyName "track_name" -NotePropertyValue $newNameS -Force
+                                                        $isTextGrp = $t1.codec -match "s_text|utf8|srt|ass|ssa|substationalpha|subrip"
+                                                        $grpName = if ($isTextGrp) { "TEXT" } else { $t1.codec }
+                                                        $actionMsg = "[DSA] SWAP (Subgroup:$grpName): Swapping role keywords between Track:$($t1.id+1) and Track:$($t2.id+1)"
+                                                    }
+                                                    elseif (-not $hasDiagL -or -not $hasSignS -or ($nameL -match "^(?i)(English|Subtitles|Eng|Subs?|English Subtitles)?$") -or $isNameMissingHon) {
+                                                        $isHonL = ($largeTrack.DSA_DetectedLang -eq "enm" -or $largeTrack.properties.language -eq "enm" -or $nameL -match "Honorifics")
+                                                        $roleL = if ($isHonL) { "Honorifics Full Dialogue" } else { "Full Dialogue" }
+                                                        
+                                                        $cleanL = &$SanitizeName $nameL; $cleanS = &$SanitizeName $nameS
+                                                        $newNameL = if ([string]::IsNullOrWhiteSpace($cleanL)) { $roleL } else { "$roleL [$cleanL]" }
+                                                        $newNameS = if ([string]::IsNullOrWhiteSpace($cleanS)) { "Signs & Songs" } else { "Signs & Songs [$cleanS]" }
+                                                        
+                                                        if ($newNameL -eq $newNameS) { $newNameL = $roleL; $newNameS = "Signs & Songs" }
+
+                                                        if ($newNameL -ne $nameL -or $newNameS -ne $nameS) {
+                                                            $needsChange = $true
+                                                            if ($Fix) {
+                                                                if ($newNameL -ne $nameL) { $Params += @('--edit', "track:$($largeTrack.id + 1)", '--set', "name=$newNameL") }
+                                                                if ($newNameS -ne $nameS) { $Params += @('--edit', "track:$($smallTrack.id + 1)", '--set', "name=$newNameS") }
+                                                            }
                                                             $largeTrack.properties | Add-Member -NotePropertyName "track_name" -NotePropertyValue $newNameL -Force
-                                                        }
-                                                    }
-                                                } else { $newNameL = $nameL }
-
-                                                # Signs Track (Small)
-                                                if (-not $handledS -and $nameS -notmatch "Signs & Songs") {
-                                                    $groupS = &$SanitizeName $nameS
-                                                    $newNameS = if ([string]::IsNullOrWhiteSpace($groupS)) { "Signs & Songs" } else { "Signs & Songs [$groupS]" }
-
-                                                    if ($newNameS -ne $nameS) {
-                                                        $needsChange = $true
-                                                        if ($Fix) {
                                                             $smallTrack.properties | Add-Member -NotePropertyName "track_name" -NotePropertyValue $newNameS -Force
+                                                            $isTextGrp = $t1.codec -match "s_text|utf8|srt|ass|ssa|substationalpha|subrip"
+                                                            $grpName = if ($isTextGrp) { "TEXT" } else { $t1.codec }
+                                                            $actionMsg = "[DSA] FIX (Subgroup:$grpName): Corrected roles (Large: '$newNameL', Small: '$newNameS')"
+                                                        } else {
+                                                            $isTextGrp = $t1.codec -match "s_text|utf8|srt|ass|ssa|substationalpha|subrip"
+                                                            $grpName = if ($isTextGrp) { "TEXT" } else { $t1.codec }
+                                                            $actionMsg = "[DSA] VERIFIED (Subgroup:$grpName): Tracks meet ratio threshold ($($ratio.ToString('F2')))"
                                                         }
                                                     }
-                                                } else { $newNameS = $nameS }
-                                                
-                                                if ($newNameL -eq $newNameS) { $newNameL = "Full Dialogue"; $newNameS = "Signs & Songs" }
-
-                                                if ($Fix) {
-                                                    if ($newNameL -ne $nameL) { $Params += @('--edit', "track:$($largeTrack.id + 1)", '--set', "name=$newNameL") }
-                                                    if ($newNameS -ne $nameS) { $Params += @('--edit', "track:$($smallTrack.id + 1)", '--set', "name=$newNameS") }
-                                                }
-                                                $largeTrack.properties | Add-Member -NotePropertyName "track_name" -NotePropertyValue $newNameL -Force
-                                                $smallTrack.properties | Add-Member -NotePropertyName "track_name" -NotePropertyValue $newNameS -Force
-                                                $largeTrack.properties | Add-Member -NotePropertyName "DSA_Handled" -NotePropertyValue $true -Force
-                                                $smallTrack.properties | Add-Member -NotePropertyName "DSA_Handled" -NotePropertyValue $true -Force
-                                                $actionMsg = "[DSA] FIX: Corrected Garbage/Missing names (Large: '$newNameL', Small: '$newNameS')"
-                                            }
-                                            else {
-                                                $actionMsg = "[DSA] VERIFIED: Track names contain correct role keywords (Ratio: $($ratio.ToString('F2')))"
-                                            }
-
-                                            if ($t.id -eq $ambiguousTracks[0].id) {
-                                                if ($DevDebug) { 
-                                                    if ($actionMsg -match "SWAP|FIX") {
-                                                        Write-Host "  [DevDebug-DSA] Found Track:$($ambiguousTracks[0].id + 1) Name: $($dsaCtx.OriginalNames[$ambiguousTracks[0].id])" -ForegroundColor Gray
-                                                        Write-Host "  [DevDebug-DSA] Found Track:$($ambiguousTracks[1].id + 1) Name: $($dsaCtx.OriginalNames[$ambiguousTracks[1].id])" -ForegroundColor Gray
+                                                    else { 
+                                                        $isTextGrp = $t1.codec -match "s_text|utf8|srt|ass|ssa|substationalpha|subrip"
+                                                        $grpName = if ($isTextGrp) { "TEXT" } else { $t1.codec }
+                                                        $actionMsg = "[DSA] VERIFIED (Subgroup:$grpName): Tracks meet ratio threshold ($($ratio.ToString('F2')))" 
                                                     }
-                                                    $consoleMsg = $actionMsg -replace '^\[DSA\]', '[DevDebug-DSA]'
-                                                    $msgColor = if ($actionMsg -match "SWAP|FIX") { "DarkYellow" } else { "Green" }
-                                                    Write-Host "  $consoleMsg" -ForegroundColor $msgColor 
-                                                } # Closes: if ($Fix) [Inside Condition 3.2 Fix Garbage/Missing Names]
-                                                [void]$fixDetails.Add("  $actionMsg")
-                                            } # Closes: if ($t.id -eq $ambiguousTracks[0].id) [Reporting Guard]
-                                        } # Closes: if ($ratio -ge $dynRatio -and $isDualEng) [Dual English Ratio Evaluation]
-                                    } # Closes: if ($w1 -gt 0 -or $w2 -gt 0) [Zero Safety Gate]
-                                } # Closes: if ($ambiguousTracks.Count -eq 2 -and ...) [Stage 3 Exact 2 Tracks Only]
-                            } # Closes: if ($null -ne $dsaCtx) [Stage 2/3 Context Verification]
-                        } # Closes: if ($DeepSubtitleAudit -and -not $dsaFileProcessed) [Main DSA Engine Open]
+
+                                                    if ($DevDebug) { Write-Host "  $($actionMsg -replace '^\[DSA\]', '[DevDebug-DSA]')" -ForegroundColor $(if ($actionMsg -match "SWAP|FIX") { "DarkYellow" } else { "Green" }) }
+                                                    [void]$fixDetails.Add("  $actionMsg")
+                                                    $largeTrack.properties | Add-Member -NotePropertyName "DSA_Handled" -NotePropertyValue $true -Force
+                                                    $smallTrack.properties | Add-Member -NotePropertyName "DSA_Handled" -NotePropertyValue $true -Force
+                                                }
+                                            }
+                                        } else {
+                                            # CASE 2: More than 2 Tracks (Outlier Detection)
+                                            $grpWeights = $grp.Group | ForEach-Object { 
+                                                $weight = if ($dsaCtx.Weights.ContainsKey($_.id)) { $dsaCtx.Weights[$_.id] } else { 0 }
+                                                $lingW  = if ($dsaCtx.LinguisticWeights.ContainsKey($_.id)) { $dsaCtx.LinguisticWeights[$_.id] } else { 0 }
+                                                [PSCustomObject]@{ T = $_; W = [int64]$weight; L = [int]$lingW } 
+                                            } | Sort-Object W
+                                            
+                                            $maxWeight = $grpWeights[-1].W
+                                            $minWeight = $grpWeights[0].W
+                                            $isTextGrp = $grpWeights[0].T.codec -match "s_text|utf8|srt|ass|ssa|substationalpha|subrip"
+
+                                            # Synchronized Outlier Threshold (45% sizing floor)
+                                            $threshold = 0.45
+
+                                            if ($minWeight -gt 0 -and $maxWeight -gt 0 -and ($minWeight / $maxWeight -lt $threshold)) {
+                                                # [FIX] Outlier Pre-Check: Protect Dubtitles, Commentary, and CC/SDH (Name or Flag) from being considered for rename
+                                                foreach ($item in $grpWeights) {
+                                                    $tO = $item.T; $curName = if ($tO.properties.track_name) { $tO.properties.track_name } else { "" }
+                                                    $isAcc = ($curName -match "\b(SDH|HI|CC)\b" -or $tO.properties.flag_hearing_impaired)
+                                                    if ($curName -match $script:RegexDub -or $curName -match "Commentary|Interview" -or $isAcc) { 
+                                                        $tO.properties | Add-Member -NotePropertyName "DSA_Handled" -NotePropertyValue $true -Force 
+                                                    }
+                                                }
+                                                $grpName = if ($isTextGrp) { "TEXT" } else { $grpWeights[0].T.codec }
+                                                
+                                                # Identify Large Candidates (Tracks above threshold)
+                                                $largeTracks = $grpWeights | Where-Object { ($_.W / $maxWeight) -ge $threshold } | Sort-Object L -Descending
+                                                $firstLargeId = ($largeTracks | Select-Object -First 1).T.id
+
+                                                # Pre-Scan: Detect existing Commentary/Interview tags in the subgroup
+                                                $commentaryInGroup = ($grpWeights | Where-Object { $_.T.properties.track_name -match "Commentary|Interview" }).Count -gt 0
+
+                                                foreach ($item in $grpWeights) {
+                                                    $tO = $item.T; 
+                                                    if ($tO.properties.DSA_Handled) { continue }
+                                                    $curName = if ($tO.properties.track_name) { $tO.properties.track_name } else { "" }
+                                                    $effL = if ($tO.DSA_DetectedLang) { $tO.DSA_DetectedLang } else { $tO.properties.language }
+                                                    $isSmallSize = ($item.W / $maxWeight -lt $threshold)
+                                                    
+                                                    # Role Identification: Small size + Low Linguistic Density = Signs & Songs
+                                                    $isSmall = $isSmallSize -and ($item.L -lt 30)
+                                                    
+                                                    # Role Identification: If "The" count is significantly lower than the leader (Common for Commentaries)
+                                                    $isLingCommentary = ($item.L -ge 30) -and ($item.L / [Math]::Max(1, $largeTracks[0].L) -lt 0.75)
+                                                    
+                                                    $isLarge = -not $isSmallSize
+                                                    $isHon = ($effL -eq "enm" -or $curName -match $script:RegexHon)
+                                                    
+                                                    # Naming Gate: Only rename unnamed tracks if they are the linguistic winner or proven outliers
+                                                    $isFirstLarge = ($tO.id -eq $firstLargeId)
+                                                    $isCloseToLeader = ($largeTracks.Count -gt 0) -and ($item.L / [Math]::Max(1, $largeTracks[0].L) -ge 0.85)
+                                                    $skipRename = $isLarge -and $isGlobalCommentaryEnv -and -not $isFirstLarge -and -not $commentaryInGroup -and [string]::IsNullOrWhiteSpace($curName) -and -not $isCloseToLeader
+
+                                                    if ($effL -match "eng|enm" -and -not $skipRename) {
+                                                        $isCommentary = ($curName -match "Commentary|Interview")
+                                                        $isSDH = ($curName -match "\b(SDH|HI|CC)\b" -or $tO.properties.flag_hearing_impaired)
+                                                        
+                                                        $role = if ($isSmall) { "Signs & Songs" } 
+                                                                elseif ($isCommentary -or ($isLingCommentary -and $isGlobalCommentaryEnv)) { "Commentary" }
+                                                                elseif ($isSDH) { "SDH/CC" }
+                                                                else { if ($isHon) { "Honorifics Full Dialogue" } else { "Full Dialogue" } }
+                                                        
+                                                        # Correctness Gate: Skip if name already matches identified role
+                                                        $isCorrect = if ($role -eq "Signs & Songs") { $curName -match "Signs" -and $curName -match "Songs" }
+                                                                     elseif ($role -match "Honorifics") { $curName -match "Honorifics" -and $curName -match "Full Dialogue" }
+                                                                     elseif ($role -eq "Full Dialogue") { $curName -match "Full Dialogue" -and $curName -notmatch "Honorifics" }
+                                                                     elseif ($role -eq "SDH/CC") { $curName -match "\b(SDH|HI|CC)\b" }
+                                                                     else { $curName -match [regex]::Escape($role) }
+                                                        
+                                                        if ($isCorrect) { 
+                                                            $tO.properties | Add-Member -NotePropertyName "DSA_Handled" -NotePropertyValue $true -Force
+                                                            continue 
+                                                        }
+
+                                                        $cleanBase = &$SanitizeName $curName
+                                                        $newName = if ([string]::IsNullOrWhiteSpace($cleanBase)) { $role } else { "$role [$cleanBase]" }
+                                                        
+                                                        if ($newName -ne $curName) {
+                                                            $needsChange = $true
+                                                            if ($Fix) { $Params += @('--edit', "track:$($tO.id+1)", '--set', "name=$newName") }
+                                                            $tO.properties | Add-Member -NotePropertyName "track_name" -NotePropertyValue $newName -Force
+                                                            $actionMsg = "[DSA] OUTLIER-FIX (Subgroup:$grpName): Identified Track:$($tO.id+1) as $role"
+                                                            if ($DevDebug) { Write-Host "  [DevDebug-DSA] $actionMsg" -ForegroundColor DarkYellow }
+                                                            [void]$fixDetails.Add("  $actionMsg")
+                                                        }
+                                                        $tO.properties | Add-Member -NotePropertyName "DSA_Handled" -NotePropertyValue $true -Force
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                } # Closes: if ($ambiguousTracks.Count -ge 2 -and ...) [Decision Engine]
+                            } # Closes: if ($null -ne $dsaCtx) [Context Verification]
+                        } # Closes: if ($DeepSubtitleAudit -and -not $dsaFileProcessed) [Main Gate]
                         # --- END DSA ENGINE ---
                         
-                        $trackLang = $t.properties.language.ToLower()
+                        # [TRUTH SYNC] Force-load DSA discoveries into loop variables for accurate scoring
+                        $trackLang = if ($t.DSA_DetectedLang -and $t.DSA_DetectedLang -ne "und") { 
+                            if ($t.DSA_DetectedLang -eq "enm") { "eng" } else { $t.DSA_DetectedLang } 
+                        } else { $t.properties.language.ToLower() }
                         
                         # 1. ALWAYS capture current default status so we can strip it later if needed
                         $isCurrentlyDefault = ($t.properties.default_track -eq $true)
@@ -3484,7 +3690,7 @@ foreach ($folderPath in $targetFolders) {
                             WasDefault = $isCurrentlyDefault
                             Rules      = $scoring.Rules
                         }
-                        continue 
+                        
                     } # <--- This is the first brace you were seeing
 
                     # --- APPLY GLOBAL FLAG RESETS (Audio only here, Subs handled after loop) ---
@@ -3598,7 +3804,11 @@ foreach ($folderPath in $targetFolders) {
 
                     # PREFERRED OR NOTHING: Use Effective Language to authorize the Default flag
                     $winnerEffLang = if ($dsaDetected -and $dsaDetected -ne "und") { $dsaDetected } else { $winner.Lang }
-                    $isWinnerValidForDefault = ($winnerEffLang -eq $targetSubLang) -or ($winnerEffLang -eq "und") -or $isWinnerHon
+                    # Authorize default if language matches, is undefined, is honorific, OR is the lone confirmed dialogue track
+                    $isWinnerValidForDefault = ($winnerEffLang -eq $targetSubLang) -or 
+                                               ($winnerEffLang -eq "und") -or 
+                                               $isWinnerHon -or 
+                                               ($subCandidates.Count -eq 1 -and $winner.Name -match $script:RegexDiag)
                     $targetDefaultValue = if ($isWinnerValidForDefault) { 1 } else { 0 }
 
                     # [FIX] Winner Needs Fix if current language doesn't match the corrected target language
@@ -3709,7 +3919,7 @@ foreach ($folderPath in $targetFolders) {
                         [void]$fixDetails.Add("  STATUS: Changes applied to -> $targetFile")
                     }
                 }
-                [void]$fixDetails.Add(""); $fixDetails | Out-File $fixerLog -Append -Encoding utf8
+                [void]$fixDetails.Add(""); $fixDetails | Out-File $fixerLog -Append -Encoding utf8BOM
             } # <--- END SEQUENTIAL FILES LOOP
             Write-Host "" # Clear progress bar line
         } # <--- v2026.05.13_11.23.00 - END OF THE "ELSE" AUDITOR BYPASS # <--- v2026.05.13_11.23.00 - END OF THE "ELSE" AUDITOR BYPASS
@@ -3719,13 +3929,13 @@ foreach ($folderPath in $targetFolders) {
     # --- STANDARD AUDITOR LOGGING ---
     # This only runs if $NoHwVideoSearch is FALSE because of the 'continue' above
     $spacer = "`r`n💜 • 💙 • 🦋 • ❤️ • 💛 • 🦋 • 💜 • 💙 • 🦋 • ❤️ • 💛 • 🦋 • 💜 • 💙 • 🦋 • ❤️ • 💛`r`n"
-    $spacer | Out-File $detailLog -Append -Encoding utf8
+    $spacer | Out-File $detailLog -Append -Encoding utf8BOM
     
     $compEntry = New-Object System.Collections.Generic.List[string]
     $compEntry.Add("Folder: $($folderPath.FullName)")
     $compEntry.Add($matchStatus)
     $compEntry.Add("Total: $($mkvFiles.Count) | Matches Primary: $($primaryGroup.Files.Count) | Mismatches: $mismatches`r`n")
-    $compEntry | Out-File $compLog -Append -Encoding utf8
+    $compEntry | Out-File $compLog -Append -Encoding utf8BOM
     
 } # <--- END FOLDER LOOP
 
@@ -3812,7 +4022,9 @@ if ($NoHwVideoSearch) {
         
         # 4. Perform the final surgical overwrite
         # Use .NET WriteAllLines to bypass PowerShell's formatting engine entirely
-        [System.IO.File]::WriteAllLines($noHwLog, [string[]]$finalOutput, [System.Text.Encoding]::UTF8)
+        # Use a UTF8 Encoding with a BOM to ensure Notepad++ identifies it correctly
+        $utf8BOM = New-Object System.Text.UTF8Encoding($true)
+        [System.IO.File]::WriteAllLines($noHwLog, [string[]]$finalOutput, $utf8BOM)
     }
 }
 
