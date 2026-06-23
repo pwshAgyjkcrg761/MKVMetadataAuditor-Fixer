@@ -73,6 +73,7 @@ Beyond standard metadata auditing, the suite includes a specialized compatibilit
 | Flag | Description |
 | :--- | :--- |
 | `-VerifyUpdates \| -V \| -Verify` | **Closed-Loop Verification:** Launches a second-pass audit immediately after fixing to confirm all discrepancies were resolved. |
+| `-Sequential \| -seq` | Disables parallel processing and forces the script to analyze one file at a time. This is useful for troubleshooting performance issues, identifying specific file locks, or reducing system resource competition on legacy hardware. |
 | `-DevDebug \| -Dev \| -DevD \| -DBG` | **Exposing the Black Box:** Disables UI suppression to reveal tool system paths, exact scoring arithmetic, and real-time DSA tracing. |
 | `-help \| -manual` | Displays the internal help manual. |
 | `-DelLog` | **Fresh Start:** Clears all files within the logs directory before starting the operation. |
@@ -97,4 +98,4 @@ Beyond standard metadata auditing, the suite includes a specialized compatibilit
 ---
 > **Document Control**  
 > *This document is up-to-date with the following version of MKVMetadataAuditor+Fixer.*  
-> *2026.06.10__15.36.00*
+> *2026.06.13__15.00.00*
