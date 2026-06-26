@@ -86,8 +86,9 @@ Beyond standard metadata auditing, the suite includes a specialized compatibilit
 ---
 
 ## Dependencies
-* **MKVToolNix:** Required for header probing (`mkvmerge`), raw subtitle extraction (`mkvextract`), and metadata editing (`mkvpropedit`).
-* **MediaInfo CLI:** Required for video profile verification during NoHW searches.
+* **PowerShell:** Built with PowerShell 7.6.x.
+* **<a href="https://mkvtoolnix.download/" target="_blank" rel="noopener noreferrer">MKVToolNix:</a>** Required for header probing (`mkvmerge`), raw subtitle extraction (`mkvextract`), and metadata editing (`mkvpropedit`).
+* **<a href="https://mediaarea.net/en/MediaInfo" target="_blank" rel="noopener noreferrer">MediaInfo DLL & CLI:</a>** Required for video profile verification during NoHW searches.
 
 ## Support & Maintenance
 **This repository is provided "as-is" for archival purposes.** The author is not actively looking for feedback, feature requests, or bug reports. The issue tracker is disabled, and the author will not be responding to inquiries regarding setup or usage.
