@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: MKVMetadataAuditor+Fixer.ps1
-# VERSION: 2026.06.23__09.39.56
+# VERSION: 2026.06.27__09.35.00
 # TARGET: PowerShell 7.6.3 LTS
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -142,7 +142,7 @@ if ($FixNoBackup) { $Fix = $true }
 if ($DeepSubtitleAuditDebugExtraction -or $DeepSubtitleAuditLanguageDetectionLimit2 -or $DeepSubtitleAuditNOLanguageDetection) { $DeepSubtitleAudit = $true }
 
 # --- GLOBAL VERSION DEFINITION ---
-$scriptVersion = "2026.06.23__09.39.56"
+$scriptVersion = "2026.06.27__09.35.00"
 
 # Set encoding to prevent Mojibake in logs and console
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
@@ -1098,12 +1098,14 @@ function Show-ProjectManual {
      "",
      "  SCORING ENGINE:",
      "  The script employs a sophisticated weighted scoring algorithm to",
-     "  determine which subtitle track should be the 'Default'. It automatically",
-     "  penalizes 'Signs & Songs' tracks (-200) while prioritizing full dialogue",
-     "  (+150). It further factors in Codec Priority (up to +100), Honorifics",
-     "  bonus (+300), and even physical Track Order penalties (-40 per slot).",
-     "  This ensures that even in complex files with 10+ tracks, the most",
-     "  complete English dialogue track is selected for the viewer.`n" | ForEach-Object { Write-Host $_ -ForegroundColor DarkMagenta }
+     "  determine which subtitle track should be the 'Default'. The engine",
+     "  prioritizes your Preferred Language above all else (+5000), then",
+     "  evaluates content: prioritizing Full Dialogue (+150) while heavily",
+     "  penalizing 'Signs & Songs' (-200) or 'Dubtitles' (-100). It further",
+     "  factors in Codec Priority (up to +100), Fansub Group preferences",
+     "  (up to +10000), Honorifics (up to +350), and physical Track Order",
+     "  penalties (-40 per slot). This ensures that even in complex files",
+     "  with 10+ tracks, the most complete dialogue track is selected.`n" | ForEach-Object { Write-Host $_ -ForegroundColor DarkMagenta }
 
     Write-Host " DEEP SUBTITLE AUDIT (DSA):" -ForegroundColor DarkYellow
     "  When track names are missing or generic (e.g., 'English'), the DSA",
@@ -1114,14 +1116,17 @@ function Show-ProjectManual {
     "  perfect accuracy.`n" | ForEach-Object { Write-Host $_ -ForegroundColor DarkCyan }
     
     Write-Host " DEPENDENCIES:" -ForegroundColor DarkYellow
+    "  • PowerShell: Built with PowerShell 7.6.x.",
     "  • MKVToolNix (mkvmerge): Used for deep-probing file headers and", 
     "    extracting detailed track metadata for the audit.",
     "  • MKVToolNix (mkvextract): Utilized by the Deep Subtitle Audit engine",
     "    to dump raw subtitle streams for size comparison analysis.",    
     "  • MKVToolNix (mkvpropedit): The primary tool for the 'Fix' engine,", 
     "    allowing instant metadata edits without remuxing the file.", 
-    "  • MediaInfo: Utilized specifically during NoHW searches", 
-    "    to verify video profiles and bit-depth accuracy.`n" | ForEach-Object { Write-Host $_ -ForegroundColor DarkGray }
+    "  • MediaInfo (mediainfo.dll): Required globally to analyze video profiles, bit-depth,",
+    "    chroma subsampling, and color space characteristics during audits.",
+    "  • MediaInfo CLI (mediainfo.exe): Required globally to provide extended path support,",
+    "    ensuring files with paths exceeding 250 characters can be safely analyzed.`n" | ForEach-Object { Write-Host $_ -ForegroundColor DarkGray }
     
     Write-Host "`n USAGE:" -ForegroundColor DarkYellow
     Write-Host "  .\MKVMetadataAuditor+Fixer.ps1 [Flags] -Path 'G:\Media'" -ForegroundColor DarkGreen
@@ -1145,9 +1150,11 @@ function Show-ProjectManual {
     
     Write-Host "`n CORE FLAGS:`n" -ForegroundColor DarkYellow
 
-    &$PrintManualBlock "  -Path <string>" @(
-    "      Defines the target directory. The script will recursively scan all",
-    "      subfolders for MKV files to perform bulk auditing.`n"
+    &$PrintManualBlock "  -Path <string[]>" @(
+    "      Defines the target directory or directories. The script supports",
+    "      multiple paths and will recursively scan all subfolders for MKV",
+    "      files to perform bulk auditing. You can also drag and drop multiple",
+    "      folders onto the script.`n"
 )
 
     &$PrintManualBlock "  -Fix" @(
@@ -1243,7 +1250,7 @@ function Show-ProjectManual {
     "      or 'enm', ensuring they are selected over standard dialogue.`n"
 )
 
-    &$PrintManualBlock "  -SubtitleFactorTrackOrder | -SFTO | -TrackOrder" @(
+    &$PrintManualBlock "  -SubtitleFactorTrackOrder | -SFTO | -SubTrackOrder | -TrackOrder" @(
     "      Activates a 'Positional Penalty' within the scoring engine.",
     "      When active, every subtitle track is penalized -40 points for each",
     "      position it occupies away from the top. This is extremely effective",
@@ -1252,7 +1259,7 @@ function Show-ProjectManual {
     "      specialty tracks appearing later from accidentally winning.`n"
 )
     
-    &$PrintManualBlock "  -FansubGroupPriority | -fg <string>" @(
+    &$PrintManualBlock "  -subtitleFansubGroupPriority | -fg <string>" @(
     "      Sets preferred fansub groups for subtitle track prioritization",
     "      (e.g., -fg 'commie'). Pass an empty string (`"`") to clear the",
     "      list and reset preferences via command line.`n"
@@ -1261,17 +1268,19 @@ function Show-ProjectManual {
     &$PrintManualBlock "  -DeepSubtitleAudit | -DSA | -Deep | -DeepAudit" @(
     "      Enables the 'Intelligence Tier' of the auditor. This is designed",
     "      specifically for files with missing or ambiguous track names.",
-    "      It operates in three distinct stages:",
+    "      It operates in four distinct stages:",
     "      1. HEADER PROBE: Checks if internal statistics can resolve the role.",
     "      2. EXTRACTION: Dumps raw subtitle samples to the TEMP directory.",
     "      3. ANALYSIS: Compares bitstream character density and file ratios.",
+    "      4. DETECTION: Probes text for Japanese Kana, Hangul, or English",
+    "         honorifics to verify and correct language headers (e.g. 'enm').",
     "      Files with a size ratio of 2.0x (Text) or 3.0x (Image) are automatically",
     "      identified; the larger stream is tagged as 'Full Dialogue' and the",
     "      smaller as 'Signs & Songs'. When combined with -Fix, it will",
     "      permanently rename the tracks to match these discoveries.`n"
 )
 
-    &$PrintManualBlock "  -DeepSubtitleAuditDebugExtraction | -DSADE" @(
+    &$PrintManualBlock "  -DeepSubtitleAuditDebugExtraction | -DSADE | -DSADebugEx | -DeepDebugEx | -DeepAuditDbgEx" @(
     "      Forces the DSA engine to perform a full bitstream extraction even when",
     "      statistical headers (like NUMBER_OF_FRAMES) are present. While text-based",
     "      tracks already require extraction for Language Detection, this flag is",
@@ -1279,14 +1288,14 @@ function Show-ProjectManual {
     "      or when Language Detection is disabled via -NLD.`n"
 )
 
-    &$PrintManualBlock "  -DeepSubtitleAuditLanguageDetectionLimit2 | -DSALDL2 | -LDL2" @(
+    &$PrintManualBlock "  -DeepSubtitleAuditLanguageDetectionLimit2 | -DSALDL2 | -LDL2 | -DeepSALDL2 | -LngDL2 | -LanguageDetectionL2" @(
     "      Limits the DSA engine to files containing only 1 or 2 subtitle tracks.",
     "      When active, files with 3 or more subtitles will be skipped entirely",
     "      by the Deep Audit engine.`n"
 )
 
 
-    &$PrintManualBlock "  -DeepSubtitleAuditNOLanguageDetection | -DSANLD | -NLD" @(
+    &$PrintManualBlock "  -DeepSubtitleAuditNOLanguageDetection | -DSANLD | -NLD | -DeepSANLD | -NoLngD | -LanguageDetectionOff | -LDO" @(
     "      Disables the linguistic probe within the DSA engine. When active,",
     "      the script will skip checking for Japanese Kana, Hangul, or English",
     "      honorifics, relying solely on bitstream size ratios to identify",
@@ -1325,7 +1334,7 @@ function Show-ProjectManual {
 
 )
 
-    &$PrintManualBlock "  -DevDebug | -Dev | -DevD | -DBG" @(
+    &$PrintManualBlock "  -DevDebug | -Dev | -DevD | -DBG | -DDBG" @(
     "      Exposes the 'Black Box' of the script's internal logic. It disables",
     "      UI suppression and surfaces detailed telemetry, including:",
     "      1. TOOL PATHS: Verifies system paths for MKVToolNix and MediaInfo."
@@ -1868,7 +1877,7 @@ if ($subtitleFansubGroupPriority) {
 $usedFlags = @()
 if ($PSBoundParameters.ContainsKey('videoLanguage')) { $usedFlags += "-vid" }
 if ($PSBoundParameters.ContainsKey('audioLanguagePriority')) { $usedFlags += "-aud" }
-if ($PSBoundParameters.ContainsKey('subLanguagePriority'))   { $usedFlags += "-sub" }
+if ($PSBoundParameters.ContainsKey('subtitleLanguagePriority'))   { $usedFlags += "-sub" }
 if ($PSBoundParameters.ContainsKey('subtitleCodecPriority'))     { $usedFlags += "-sc" }
 if ($PSBoundParameters.ContainsKey('subtitleFansubGroupPriority')) { $usedFlags += "-fg" }
 
