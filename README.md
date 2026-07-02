@@ -112,4 +112,6 @@ Beyond standard metadata auditing, the suite includes a specialized compatibilit
 *This script modifies MKV file headers and metadata. While designed for safety, always ensure you have backups of your media before running batch operations. The author is not responsible for any accidental data loss or corruption resulting from the use of this tool.*
 
 ---
-> **Document Control** > *This document is up-to-date with the following version of MKVMetadataAuditor+Fixer.* > *2026.06.27__09.35.00*
+> **Document Control** <br>
+> *This document is up-to-date with the following version of MKVMetadataAuditor+Fixer.* <br>
+> *2026.07.02__14.27.13*
