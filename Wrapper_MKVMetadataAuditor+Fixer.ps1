@@ -1,7 +1,7 @@
 # ==============================================================================
 # SCRIPT: Wrapper_MKVMetadataAuditor+Fixer.ps1
-# VERSION: 2026.06.19__07.06.04
-# TARGET: PowerShell 7.6.2 LTS
+# VERSION: 2026.07.02__14.27.13
+# TARGET: PowerShell 7.6.3 LTS
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
 # 
@@ -9,6 +9,14 @@
 # it under the terms of the GNU General Public License as published by
 # the Free Software Foundation, either version 3 of the License, or
 # (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program. If not, see <https://www.gnu.org/licenses/gpl-3.0.html>.
 # ==============================================================================
 # <PROTECTED>
 # ==============================================================================
@@ -80,12 +88,13 @@ switch ($true) {
     $FixSFTO { $profileFlags = "-Fix -DSA -hon -SFTO -VerifyUpdates -ep"; break }
     #Fix No Backup
     # $FixNoBackup { $profileFlags = "-FixNoBackup -DSA -DBG -hon -VerifyUpdates -ep"; break }
+    # $FixNoBackup { $profileFlags = "-FixNoBackup -ovrd -vid 'chi' -aud 'chi' -sub 'eng' -audf -DSA -DBG -VerifyUpdates -ep"; break }
     #Temp for whatever.
     $Temp { $profileFlags = "-Fix -DSA -DBG -hon -VerifyUpdates -ep"; break }
     #Chinese Donghua
-    $ChiD { $profileFlags = "-Fix -ovrd -vid 'chi' -aud 'chi' -sub 'eng' -audf -SFTO -DSA -DBG -VerifyUpdates -ep"; break }
+    $ChiD { $profileFlags = "-Fix -ovrd -vid 'chi' -aud 'chi' -sub 'eng' -audf -DSA -VerifyUpdates -ep"; break }
     #Korean Aeni
-    $KorA { $profileFlags = "-Fix -ovrd -vid 'kor' -aud 'kor' -sub 'eng' -audf -SFTO -DSA -DBG -VerifyUpdates -ep"; break }
+    $KorA { $profileFlags = "-Fix -ovrd -vid 'kor' -aud 'kor' -sub 'eng' -audf -DSA -VerifyUpdates -ep"; break }
     
 }
 
