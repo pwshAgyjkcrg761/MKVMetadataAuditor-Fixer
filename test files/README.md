@@ -6,7 +6,7 @@ This repository contains dummy test files designed to validate the functionality
 These files are intended for development and testing use only. Use them to verify that the script correctly parses metadata, renames files, and adheres to the specified folder structure without modifying your personal media collection.
 
 ## License
-The contents of the `test files` directory in this repository are licensed under a [Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International License](http://creativecommons.org/licenses/by-nc-sa/4.0/).
+The contents of the `test files` directory in this repository are licensed under <a href="LICENSE" target="_blank">Creative Commons Attribution 4.0 International License</a>.
 
 ## How to use
 1. Clone or download the `test files` directory to a separate testing location.
