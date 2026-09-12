@@ -3,6 +3,8 @@
 
 ---
 
+![MKVMetadataAuditor+Fixer Main Interface](images/MKVMetadataAuditor+Fixer-ps1_main.png)
+
 ## Overview
 MKVMetadataAuditor+Fixer is a high-performance automation suite built for media archivists who prioritize metadata integrity and container consistency. It operates by analyzing the underlying metadata headers of your files without remuxing or re-encoding the actual streams, ensuring 1:1 data integrity.
 
@@ -102,8 +104,8 @@ Beyond standard metadata auditing, the suite includes a specialized compatibilit
 
 ## Dependencies
 * **PowerShell:** Built with PowerShell 7.6.x.
-* **<a href="https://mkvtoolnix.download/" target="_blank" rel="noopener noreferrer">MKVToolNix:</a>** Deep-probes file headers (`mkvmerge`), dumps raw subtitle streams for size checks (`mkvextract`), and performs instant metadata updates without remuxing (`mkvpropedit`).
-* **<a href="https://mediaarea.net/en/MediaInfo" target="_blank" rel="noopener noreferrer">MediaInfo DLL & CLI:</a>** Globally handles video profile analysis (bit-depth, chroma subsampling, color spaces), with CLI integration ensuring extended path support for tracks exceeding 250 characters.
+* **<a href="https://mkvtoolnix.download/" target="_blank" rel="noopener noreferrer">MKVToolNix v99.0+:</a>** Deep-probes file headers (`mkvmerge`), dumps raw subtitle streams for size checks (`mkvextract`), and performs instant metadata updates without remuxing (`mkvpropedit`).
+* **<a href="https://mediaarea.net/en/MediaInfo" target="_blank" rel="noopener noreferrer">MediaInfo DLL & CLI v26.05+:</a>** Globally handles video profile analysis (bit-depth, chroma subsampling, color spaces), with CLI integration ensuring extended path support for tracks exceeding 250 characters.
 
 ## Support & Maintenance
 **This repository is provided "as-is" for archival purposes.** The author is not actively looking for feedback, feature requests, or bug reports. The issue tracker is disabled, and the author will not be responding to inquiries regarding setup or usage.
