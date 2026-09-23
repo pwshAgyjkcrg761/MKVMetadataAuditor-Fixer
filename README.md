@@ -116,4 +116,4 @@ Beyond standard metadata auditing, the suite includes a specialized compatibilit
 ---
 > **Document Control** <br>
 > *This document is up-to-date with the following version of MKVMetadataAuditor+Fixer.* <br>
-> *2026.07.02__14.27.13*
+> *2026.09.23__11.30.22*
