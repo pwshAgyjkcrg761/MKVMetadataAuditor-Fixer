@@ -1,7 +1,7 @@
 # ==============================================================================
 # SCRIPT: MKVMetadataAuditor+Fixer.ps1
-# VERSION: 2026.07.02__14.27.13
-# TARGET: PowerShell 7.6.3 LTS
+# VERSION: 2026.09.23__11.30.22
+# TARGET: PowerShell 7.6.6 LTS
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
 # 
@@ -20,41 +20,48 @@
 # ==============================================================================
 # <PROTECTED>
 # ==============================================================================
-# AI INSTRUCTIONS v2026.06.23__09.31.51 : 
-# 1. HEADER: Update Version comment.
-#    - VERSIONING: Update using CHICAGO TIME (Central Time), 24 hour clock.
-#    - OUTPUT: When printing the updated version, only provide the new version
-#      number. Do not describe the change as complex or explain the edit.
-#    - CRITICAL: Do not use AI system time. Use the time provided in the most 
-#      recent user prompt or link (Ref: https://www.timeanddate.com/worldclock/usa/chicago).
-#    - STAMP ACCURACY: Ensure the minutes match the current Chicago clock exactly.
+# AI INSTRUCTIONS
+# Copyright (c) 2026 pwshAgyjkcrg761
+# License: MIT
+# Source: https://git.disroot.org/pwshAgyjkcrg761/AI_Instructions
 #
-# 2. DO NOT modify or refactor any code inside <PROTECTED> tags.
+# AI INSTRUCTIONS v2026.09.01__04.25.09 : 
+#
+# 1. MESSAGE STAMP: 
+#    - Every response containing code MUST begin with a standalone version stamp.
+#    - Use CHICAGO TIME (Central Time), 24-hour clock.
+#    - Format: YYYY.MM.DD__HH.MM.SS.
+#    - CRITICAL: Use the time provided in the prompt or at 
+#      https://www.timeanddate.com/worldclock/usa/chicago. Ensure minutes are exact.
+#
+# 2. VERSION SNIPPET PROHIBITION:
+#    - DO NOT provide code snippets, anchors, or steps to update the script's 
+#      internal VERSION comment or $scriptVersion variable. 
+#    - The user handles internal file versioning manually based on the Message Stamp.
+#
 # 3. SCRIPT OUTPUT (SURGICAL FIXES ONLY):
-#    - VERSIONING/OUTPUT: Follow the Versioning and Output rules defined in Section 1.
-#    - Provide minimal, highly targeted, surgical edits. Do not rewrite large blocks or entire functions unless explicitly requested.
-#    - When printing the script, only print snippets unless asked for the entire script.
+#    - Provide minimal, highly targeted, surgical edits. Do not rewrite large blocks or 
+#      entire functions.
 #    - Always use a codebox with a copy button.
-#    - If there are multiple modifications, present them strictly ONE step at a time,
-#      and wait for user confirmation before proceeding to the next step. 
-#      NOTE: The Version Header update is an atomic action and must be output 
-#      immediately upon any code change, regardless of the step-by-step flow.
+#    - Multiple modifications MUST be presented strictly ONE step at a time. Wait for 
+#      user confirmation before proceeding to the next step. 
+#    - DO NOT modify or refactor any code inside <PROTECTED> tags.
 #
-# 4. VERBATIM ANCHOR PROTOCOL:
-#    - To facilitate "Find" in Notepad++ always structure edits with:
-#     - "Verbatim Anchor (Before)" - The exact lines of existing code immediately before the change.
-#     - "Verbatim Anchor (After)" - The exact lines of existing code immediately after the change.
-#     - "Snippet to REPLACE" - The exact code block to be deleted.
-#     - "What to PASTE in its place" - The new code block to be inserted.
+# 4. VERBATIM ANCHOR PROTOCOL (FOR NOTEPAD++):
+#    - To facilitate "Find" in Notepad++, always structure edits with:
+#      - "Verbatim Anchor (Before)" - The exact lines of existing code immediately before 
+#         the change.
+#      - "Verbatim Anchor (After)" - The exact lines of existing code immediately after 
+#         the change.
+#      - "Snippet to REPLACE" - The exact code block to be deleted.
+#      - "What to PASTE in its place" - The new code block to be inserted.
 #    - Do not summarize, truncate, or refactor the existing code used as an anchor.
-#    - Copy spaces, comments, and symbols exactly as they appear in the file.
-#    - Keep anchors and replacement snippets as small and precise as possible to isolate only the necessary change.
+#    - Match spaces, comments, and symbols exactly as they appear in the file.
 #
 # 5. CONTENT PRESERVATION:
-#    - Do not remove, modify, or strip out telemetry data or DevDebug information 
-#      from any provided code.
-#==============================================================================
-#==============================================================================
+#    - Do not remove, modify, or strip out telemetry data or DevDebug information from any 
+#      provided code.
+# ==============================================================================
 # </PROTECTED>
 
 [CmdletBinding()]
@@ -150,7 +157,7 @@ if ($FixNoBackup) { $Fix = $true }
 if ($DeepSubtitleAuditDebugExtraction -or $DeepSubtitleAuditLanguageDetectionLimit2 -or $DeepSubtitleAuditNOLanguageDetection) { $DeepSubtitleAudit = $true }
 
 # --- GLOBAL VERSION DEFINITION ---
-$scriptVersion = "2026.07.02__14.27.13"
+$scriptVersion = "2026.09.23__11.30.22"
 
 # Set encoding to prevent Mojibake in logs and console
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
@@ -594,6 +601,14 @@ function Detect-SubtitleLanguage {
         $engMatches = [regex]::Matches($text, $engStopwords).Count
         $theCount = [regex]::Matches($text, "\bthe\b").Count
         $honMatches = if ($Honorifics) { [regex]::Matches($text, "-(?:san|kun|chan|sama|dono|senpai|kohai|sensei|niisan|niichan|neesan|neechan|jiisan|jiichan|baasan|baachan|shisou|heika|denka|kakka|tan|chama)\b").Count } else { 0 }
+
+        # Bypass Honorifics evaluation for Signs & Songs tracks (Uses inline pattern to support runspaces)
+        $signPattern = "Sign|Song|Lyric|Opening|Ending|\bOP\b|\bED\b|Partial|Forced|Translation|ASSR|S&S|S\s&\sS"
+        $diagPattern = "Dialog|Full|Japanese Audio|Main"
+        $isSignsTrack = ($TrackName -and ($TrackName -match $signPattern) -and ($TrackName -notmatch $diagPattern))
+        if ($isSignsTrack -and $honMatches -gt 0) {
+            $honMatches = 0
+        }
 
         $engDensity = $engMatches / $total
         if ($DevDebug) {
